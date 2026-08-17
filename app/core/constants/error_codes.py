@@ -1,0 +1,7 @@
+FORBIDDEN = "forbidden"
+UNAUTHORIZED = "unauthorized"
+NOT_FOUND = "not_found"
+CONFLICT = "conflict"
+VALIDATION_ERROR = "validation_error"
+APPLICATION_ERROR = "application_error"
+INTERNAL_SERVER_ERROR = "internal_server_error"
