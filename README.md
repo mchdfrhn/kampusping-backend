@@ -101,12 +101,25 @@ Production: `APP_ENV=production` menonaktifkan `/docs`.
 2. Daftarkan di `app/api/v1/router.py`.
 3. Status/slug ke `constants.py` modul tersebut.
 4. Role dicek dengan `require_role_types(ROLE_TYPE_ADMIN)` — bukan `if role_id == 91`.
-5. Migrasi Alembic jika ada tabel baru.
+5. Migrasi Alembic jika ada tabel baru — **wajib**, jangan buat tabel manual.
 
 ```bash
 alembic upgrade head
 alembic revision -m "add table x"
 ```
+
+Pola migration mengikuti `training-backend-ecertificate` (002, 004). Starter: `alembic/versions/001_reference_catalog.py` dengan `BIGINT AUTO_INCREMENT` dimulai dari 1. Lihat [`docs/alembic-sample.md`](docs/alembic-sample.md).
+
+## Unit test (opsional, disarankan)
+
+Jika timeline memungkinkan, tambahkan unit test per use case di `tests/` agar debugging mudah.
+
+```bash
+pytest
+pytest tests/test_example_role_policy.py -v
+```
+
+Contoh: `tests/test_example_role_policy.py` — RoleCatalog dan constants modul.
 
 ## Deploy production (PM2 + Nginx)
 
