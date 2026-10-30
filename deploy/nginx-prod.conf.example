@@ -1,8 +1,8 @@
-# Nginx — HIS Standard Backend (production)
-# Browser → GCP LB (HTTPS) → Nginx :80 → PM2 uvicorn 127.0.0.1:8093
-# Ganti server_name sesuai subdomain project.
+# Nginx: backend API (production)
+# Browser -> HTTPS load balancer / TLS terminator -> Nginx :80 -> PM2 uvicorn 127.0.0.1:8093
+# Replace server_name with your API domain before installing.
 
-upstream his_standard_backend_prod {
+upstream webapp_backend_prod {
     server 127.0.0.1:8093;
     keepalive 32;
 }
@@ -10,16 +10,17 @@ upstream his_standard_backend_prod {
 server {
     listen 80;
     listen [::]:80;
-    server_name api.example.hino.co.id;
+    server_name api.example.com;
 
     client_max_body_size 20m;
 
     location / {
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_pass http://his_standard_backend_prod;
+        proxy_pass http://webapp_backend_prod;
     }
 }

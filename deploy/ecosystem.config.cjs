@@ -1,8 +1,8 @@
-/** PM2 — FastAPI development/staging. */
+/** PM2: FastAPI for a development/staging host (auto-reload). */
 module.exports = {
   apps: [
     {
-      name: 'his-standard-backend-dev',
+      name: 'webapp-backend-dev',
       cwd: __dirname + '/..',
       script: '.venv/bin/uvicorn',
       args: 'app.main:app --host 127.0.0.1 --port 8090 --reload',

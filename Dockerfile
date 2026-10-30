@@ -1,23 +1,34 @@
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS builder
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+COPY requirements.txt .
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install -r requirements.txt
+
+
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+RUN groupadd --system app && useradd --system --gid app --no-create-home app
 
 WORKDIR /app
-
-RUN addgroup --system app && adduser --system --ingroup app app
-
-COPY pyproject.toml README.md requirements.txt ./
+COPY --from=builder /opt/venv /opt/venv
 COPY app ./app
 COPY alembic ./alembic
-COPY alembic.ini ./
-
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir ".[postgresql,mysql,singlestore]"
+COPY alembic.ini docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
 
 USER app
-
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+    CMD python -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"
+
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

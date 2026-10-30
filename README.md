@@ -1,144 +1,138 @@
-# HIS Standard Backend
+# Webapp Backend
 
-Base backend resmi **PT. Hino Motors Sales Indonesia** untuk semua project HIS baru.
+A production-ready FastAPI starter: JWT authentication with rotating refresh tokens, role-based
+access control, a layered module structure, async SQLAlchemy 2, Alembic migrations, and a test
+suite that covers the security-sensitive paths.
 
-Stack: **FastAPI 0.138**, **SQLAlchemy 2**, **Alembic**, **Pydantic v2**, Python **>= 3.11**.
+**Stack:** Python 3.11+, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic v2, PostgreSQL
+(MySQL / SingleStore / SQLite supported), pytest.
 
-Tiga engine database didukung: **PostgreSQL**, **MySQL**, **SingleStore**. Bisa satu koneksi atau beberapa named connection (`PRIMARY`, `IAM`, `REFERENCE`).
-
-Vendor dan IT internal **wajib** clone repo ini. ID IAM / menu / status **tidak boleh** di-hardcode di `router.py`.
-
-## Menjalankan di lokal
+## Quick start
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 cp .env.example .env
-uvicorn app.main:app --reload
 ```
 
-- Health: `GET /health`
-- Swagger (non-production): `http://localhost:8000/docs`
-- Contoh layering: `GET /api/v1/examples`
+Pick a database in `.env`. For a zero-setup try, use SQLite:
 
-## Struktur folder
+```env
+DATABASE_ENGINE=sqlite
+DATABASE_URL=sqlite+aiosqlite:///./dev.db
+```
+
+Then:
+
+```bash
+alembic upgrade head                 # create tables
+python -m app.cli seed               # sync permissions + system roles
+python -m app.cli create-admin       # uses INITIAL_ADMIN_* from .env or prompts
+uvicorn app.main:app --reload        # http://localhost:8000/docs
+```
+
+Sign in at `POST /api/v1/auth/login` and send the returned token as `Authorization: Bearer ...`.
+
+## Project layout
 
 ```text
 app/
-├── main.py                 # factory FastAPI, CORS, hide /docs di production
+├── main.py              # app factory: CORS, middleware, error handlers, /health, /ready
+├── cli.py               # seed, create-admin, purge-tokens
 ├── api/
-│   ├── deps.py             # session PRIMARY / IAM / REFERENCE
-│   └── v1/router.py        # daftar router versi 1
-├── core/
-│   ├── config.py           # Settings / .env
-│   ├── constants/          # pagination, header, error code
-│   ├── role_catalog.py     # tipe role (string), baca ID dari DB
-│   ├── auth.py             # CurrentUser, get_current_user
-│   ├── auth_session.py     # match IAM roles ↔ app_allowed_roles
-│   ├── iam_verify.py       # parse payload IAM
-│   ├── exceptions.py       # AppException + envelope error
-│   ├── middleware.py
-│   └── logging.py
-├── db/
-│   ├── session.py          # single engine (async/sync)
-│   ├── multi_session.py    # named engines
-│   ├── base.py             # Base, AuditMixin
-│   └── models/             # tabel referensi (bukan ID di controller)
+│   ├── deps.py          # DbSession, CurrentUser, require_permissions(...)
+│   └── v1/router.py     # registers module routers under /api/v1
+├── core/                # config, security (JWT/Argon2), permissions catalog, errors, logging
+├── db/                  # Base + AuditedModel, async session, seed, migration helpers
 ├── modules/
-│   ├── example/            # pola wajib: router → schema → service → repository → model
-│   ├── app_roles/          # CRUD katalog role IAM
-│   ├── menu_mapping/       # CRUD menu_id ↔ slug
-│   └── auth_context/       # GET /auth/session
-└── shared/                 # response envelope, timezone Asia/Jakarta
-alembic/
-deploy/                     # PM2 + Nginx
+│   ├── auth/            # login, refresh, logout, me, change-password
+│   ├── users/           # user management
+│   ├── roles/           # roles and the permission catalog
+│   └── example/         # complete CRUD module to copy from
+└── shared/              # pagination contract, BaseRepository (soft delete), utils
+alembic/                 # migrations
+deploy/                  # PM2 + Nginx
+tests/
 ```
 
-Alur modul bisnis:
+Every business module follows the same flow, and only the router knows about HTTP:
 
 ```text
-router.py → schema.py → service.py → repository.py → model.py → database
+router.py  ->  schema.py  ->  service.py  ->  repository.py  ->  model.py
+(HTTP)         (validation)   (rules, commit)  (queries)         (tables)
 ```
 
-Router harus tipis: HTTP + Depends saja. Query dan aturan bisnis tidak ditulis di controller.
+Start a new module by copying `app/modules/example/` ([guide](docs/adding-a-module.md)).
 
-## Peta konstanta (wajib)
+## Conventions
 
-| Jenis nilai | Tempat yang benar | Dilarang |
-|---|---|---|
-| IAM role ID numerik | tabel `app_allowed_roles` | literal di `router.py` / `service.py` |
-| Tipe role (`super_admin`, `admin`, `dealer`, `employee`) | `app/core/role_catalog.py` | angka IAM di kode |
-| Group-admin / module ID yang beda per environment | `.env` → `Settings` (`GROUP_ADMIN_ROLE_ID`) | `= 1` di file Python |
-| Menu ID | tabel `menus_mapping` | router |
-| Status/slug domain | `app/modules/{domain}/constants.py` | inline di controller |
-| Pagination, nama header | `app/core/constants/` | tersebar |
-| Kode error | `AppException` + `error_codes.py` | `HTTPException` ad-hoc |
+| Topic | Rule |
+| --- | --- |
+| Errors | Always `{"error": {"code", "message", "details"}}`; raise `AppException` |
+| Success | Plain resource or `{"items", "total", "page", "page_size"}`; no wrapper |
+| Lists | `page` (1-based), `page_size` (≤ 100), `search`, `sort_by`, `sort_order` |
+| Deletes | Soft delete (`deleted_at`, `deleted_by`); repositories filter it out |
+| Audit | `created_by` / `updated_by` / `deleted_by` come from the signed-in user |
+| Timestamps | Stored and returned in UTC, timezone-aware |
+| Transactions | Services call `commit()`; repositories only `flush()` |
+| Access control | `require_permissions("resource:action")` on the server; never role ids or names |
+| Constants | Statuses in the module's `constants.py`, permissions in `core/permissions.py` |
 
-Contoh benar: `GET /api/v1/examples/role-policy` membaca IAM ID **dari database** lewat `RoleCatalog.from_db(db)`.
+## Authentication and authorization
 
-Seed ID ke tabel referensi (SQL/Alembic data), bukan ke controller. Jangan menyalin ID project lain (misalnya 90/91) ke starter ini.
+Users, roles and permissions live in this application's database. See [docs/auth.md](docs/auth.md)
+for the token flow and security properties.
 
-## Multi-database
+- Short-lived **access token** (JWT, 15 min) sent as a Bearer header.
+- **Refresh token**: opaque, stored hashed, rotated on every use, delivered in an `HttpOnly`
+  cookie scoped to `/api/v1/auth`. Replaying a rotated token revokes the whole chain.
+- Argon2id password hashing, password policy, per-account lockout and a per-IP login rate limit.
+- **Permissions** are `resource:action` codes defined in `app/core/permissions.py`; **roles** are
+  data that admins compose from them. System roles: `admin` (everything), `member` (read-only).
 
-1. **Single engine** — `DATABASE_ENGINE` + `DATABASE_URL`
-2. **Named connections** — `DB_URL_PRIMARY`, `DB_URL_IAM`, `DB_URL_REFERENCE`
+Add a permission: define it in `core/permissions.py`, run `python -m app.cli seed`, then guard a
+route with `Depends(require_permissions(MY_PERMISSION))`.
 
-MySQL/SingleStore: session timezone `+07:00`. Waktu aplikasi: `app_now()` (`Asia/Jakarta`).
+## Configuration
 
-## Auth
+All settings are environment variables (see `.env.example`). Highlights:
 
-- Bearer token → IAM `POST /v1/verify-user` → match `app_allowed_roles` → `CurrentUser`
-- `GET /api/v1/auth/session` untuk frontend
-- Debug (hanya `APP_DEBUG=true`): header `X-Username` dan `X-Role-Ids` — **tanpa default ID IAM**
-- `GROUP_ADMIN_ROLE_ID` dari env
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_ENGINE`, `DATABASE_URL` | `postgresql`, `mysql`, `singlestore` or `sqlite`; async driver required |
+| `SECRET_KEY` | JWT signing key; production requires 32+ random characters |
+| `BACKEND_CORS_ORIGINS` | Web app origin(s) allowed to call the API with credentials |
+| `COOKIE_SECURE`, `COOKIE_SAMESITE`, `COOKIE_DOMAIN` | Refresh cookie attributes |
+| `LOGIN_RATE_LIMIT`, `RATE_LIMIT_STORAGE_URI` | Login throttling; use a shared store with several workers |
 
-Production: `APP_ENV=production` menonaktifkan `/docs`.
+With `APP_ENV=production` the app refuses to start on an unsafe configuration (weak secret,
+debug on, insecure cookie, SQLite) and disables `/docs`.
 
-## Cara menambah modul
-
-1. Buat `app/modules/{nama}/` dengan kelima file layer.
-2. Daftarkan di `app/api/v1/router.py`.
-3. Status/slug ke `constants.py` modul tersebut.
-4. Role dicek dengan `require_role_types(ROLE_TYPE_ADMIN)` — bukan `if role_id == 91`.
-5. Migrasi Alembic jika ada tabel baru — **wajib**, jangan buat tabel manual.
+## Database and migrations
 
 ```bash
+alembic revision -m "add widgets"    # then write the migration by hand
 alembic upgrade head
-alembic revision -m "add table x"
+alembic downgrade -1
 ```
 
-Pola migration mengikuti `training-backend-ecertificate` (002, 004). Starter: `alembic/versions/001_reference_catalog.py` dengan `BIGINT AUTO_INCREMENT` dimulai dari 1. Lihat [`docs/alembic-sample.md`](docs/alembic-sample.md).
+Write migrations with `op.create_table` and the helpers in `app/db/migration_helpers.py`, and
+always implement `downgrade()`. Details and the SingleStore notes: [docs/database.md](docs/database.md).
 
-## Unit test (opsional, disarankan)
-
-Jika timeline memungkinkan, tambahkan unit test per use case di `tests/` agar debugging mudah.
+## Quality checks
 
 ```bash
-pytest
-pytest tests/test_example_role_policy.py -v
+pytest                    # 60+ tests: auth flow, lockout, token reuse, RBAC, CRUD, soft delete
+ruff check . && ruff format --check .
+pyright
 ```
 
-Contoh: `tests/test_example_role_policy.py` — RoleCatalog dan constants modul.
+## Deploy
 
-## Deploy production (PM2 + Nginx)
+PM2 + Nginx scripts are in [`deploy/`](deploy/README.md); a `Dockerfile` is included and the
+repository root has a `docker-compose.yml` that runs the API, the web app and PostgreSQL.
 
-```text
-Browser → GCP Load Balancer (HTTPS) → Nginx :80 → PM2 uvicorn 127.0.0.1:8093
-```
+## License
 
-```bash
-cd /var/www/his-standard-backend
-cp deploy/.env.production.example .env
-chmod +x deploy/*.sh
-bash deploy/deploy-prod.sh --migrate --all
-```
-
-Ganti `server_name` di `deploy/nginx-prod.conf.example`. SSL di load balancer.
-
-## Larangan
-
-- Hardcode ID IAM, menu, workflow, atau status di controller
-- Mencampur SQL di `router.py`
-- Menyimpan host/password production di `.env.example`
-- Mengaktifkan Swagger di production
+[MIT](LICENSE)
