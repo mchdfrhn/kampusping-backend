@@ -1,15 +1,17 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-APP_TIMEZONE = ZoneInfo("Asia/Jakarta")
+from datetime import UTC, datetime
 
 
 def utc_now() -> datetime:
-    from datetime import UTC
-
+    """Timezone-aware current time. Timestamps are stored and exchanged in UTC."""
     return datetime.now(UTC)
 
 
-def app_now() -> datetime:
-    """Wall-clock time in Asia/Jakarta without tzinfo (MySQL/SingleStore DATETIME)."""
-    return datetime.now(APP_TIMEZONE).replace(tzinfo=None)
+def ensure_utc(value: datetime) -> datetime:
+    """Attach UTC to naive datetimes (returned by drivers that drop tzinfo, e.g. SQLite/MySQL)."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def like_pattern(term: str) -> str:
+    """Escape LIKE wildcards in user input and wrap it for a contains-search (escape is ``\\``)."""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"

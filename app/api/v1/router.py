@@ -1,15 +1,15 @@
 from fastapi import APIRouter
 
-from ...modules.app_roles.router import router as app_roles_router
-from ...modules.auth_context.router import router as auth_context_router
-from ...modules.example.router import router as example_router
-from ...modules.menu_mapping.router import router as menu_mapping_router
+from app.modules.auth.router import router as auth_router
+from app.modules.example.router import router as example_router
+from app.modules.roles.router import router as roles_router
+from app.modules.users.router import router as users_router
 
 router = APIRouter()
 
-router.include_router(example_router, prefix="/examples", tags=["Examples"])
-router.include_router(auth_context_router, tags=["Auth"])
-router.include_router(app_roles_router, tags=["App Roles"])
-router.include_router(menu_mapping_router, tags=["Menu Mapping"])
+router.include_router(auth_router)
+router.include_router(users_router)
+router.include_router(roles_router)
+router.include_router(example_router)
 
 __all__ = ["router"]

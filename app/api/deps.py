@@ -1,24 +1,59 @@
-from app.db.multi_session import get_session
-from app.db.session import get_db_session, get_sync_db_session
+from typing import Annotated
+
+from fastapi import Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.constants import CSRF_HEADER, FORBIDDEN, UNAUTHORIZED
+from app.core.exceptions import AppException
+from app.core.security import decode_access_token
+from app.db.session import get_db
+from app.modules.users.model import User
+from app.modules.users.repository import UserRepository
+
+DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+bearer_scheme = HTTPBearer(auto_error=False, description="Access token from POST /auth/login")
 
 
-def get_primary_db():
-    """Primary application database (roles catalog, menu mapping, business tables)."""
-    yield from get_session("PRIMARY")
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    db: DbSession,
+) -> User:
+    if credentials is None:
+        raise AppException("Authentication required.", status_code=401, code=UNAUTHORIZED)
+    user = await UserRepository(db).get(decode_access_token(credentials.credentials))
+    if user is None or not user.is_active:
+        raise AppException("Authentication required.", status_code=401, code=UNAUTHORIZED)
+    return user
 
 
-def get_iam_db():
-    yield from get_session("IAM")
+CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-def get_reference_db():
-    yield from get_session("REFERENCE")
+def require_permissions(*codes: str):
+    """Dependency factory: the user must hold *every* listed permission, otherwise 403.
+
+    Authorization is enforced here on the server; hiding UI elements is only a convenience.
+    """
+
+    async def checker(user: CurrentUser) -> User:
+        missing = set(codes) - user.permission_codes
+        if missing:
+            raise AppException(
+                "You do not have permission to perform this action.",
+                status_code=403,
+                code=FORBIDDEN,
+                details={"required": sorted(missing)},
+            )
+        return user
+
+    return checker
 
 
-__all__ = [
-    "get_db_session",
-    "get_sync_db_session",
-    "get_primary_db",
-    "get_iam_db",
-    "get_reference_db",
-]
+def require_csrf_header(request: Request) -> None:
+    """Cookie-authenticated endpoints must carry the custom header (see ``CSRF_HEADER``)."""
+    if not request.headers.get(CSRF_HEADER):
+        raise AppException(
+            f"Missing required header: {CSRF_HEADER}.", status_code=403, code=FORBIDDEN
+        )

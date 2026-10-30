@@ -1,7 +1,11 @@
 -r requirements.txt
 
 pytest==9.1.1
+pytest-asyncio==1.4.1
 httpx==0.28.1
+aiosqlite==0.22.1
 ruff==0.15.20
-asyncpg==0.31.0
-asyncmy==0.2.11
+pyright==1.1.414
+
+# Optional database drivers (uncomment what you need)
+# asyncmy==0.2.11      # MySQL / SingleStore

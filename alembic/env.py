@@ -3,21 +3,17 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+from alembic.runtime.migration import HeadMaintainer
 from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.sql import literal_column
 
 from alembic import context
-from alembic.ddl.impl import DefaultImpl
-from alembic.runtime.migration import HeadMaintainer
-
-
-class SingleStoreImpl(DefaultImpl):
-    __dialect__ = "singlestoredb"
 
 
 def patch_singlestore_version_update() -> None:
+    # SingleStore cannot UPDATE the shard-key column of alembic_version, so replace the row instead.
     if getattr(HeadMaintainer, "_singlestore_delete_insert_patch", False):
         return
 
@@ -52,15 +48,11 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+import app.db.models  # noqa: F401, E402
 from app.core.config import settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
-import app.db.models  # noqa: F401, E402
 
 if settings.database_engine.value == "singlestore":
-    try:
-        import sqlalchemy_singlestoredb  # noqa: F401
-    except ImportError:
-        pass
     patch_singlestore_version_update()
 
 config = context.config
