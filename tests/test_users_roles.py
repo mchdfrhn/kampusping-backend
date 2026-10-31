@@ -2,7 +2,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app.core.permissions import ADMIN_ROLE, ALL_PERMISSION_CODES, MEMBER_ROLE
+from app.core.permissions import ADMIN_ROLE, ALL_PERMISSION_CODES, PIMPINAN_ROLE
 from app.db.session import get_session_factory
 from app.modules.users.model import User
 
@@ -31,11 +31,11 @@ async def test_endpoints_require_authentication(
     assert response.status_code == 401
 
 
-async def test_member_is_forbidden_from_admin_endpoints(
-    client: httpx.AsyncClient, member_headers: Headers
+async def test_pimpinan_is_forbidden_from_admin_endpoints(
+    client: httpx.AsyncClient, pimpinan_headers: Headers
 ) -> None:
-    users = await client.get("/api/v1/users", headers=member_headers)
-    roles = await client.get("/api/v1/roles", headers=member_headers)
+    users = await client.get("/api/v1/users", headers=pimpinan_headers)
+    roles = await client.get("/api/v1/roles", headers=pimpinan_headers)
 
     assert users.status_code == roles.status_code == 403
     assert users.json()["error"]["code"] == "forbidden"
@@ -44,24 +44,24 @@ async def test_member_is_forbidden_from_admin_endpoints(
     )
     assert users.json()["error"]["details"] == {"required": ["users:read"]}
     # ...but being signed in is enough for the self-service endpoints.
-    assert (await client.get("/api/v1/auth/me", headers=member_headers)).status_code == 200
+    assert (await client.get("/api/v1/auth/me", headers=pimpinan_headers)).status_code == 200
 
 
 async def test_deactivated_user_loses_access_immediately(
     client: httpx.AsyncClient, admin_headers: Headers
 ) -> None:
-    member = await create_user("member@example.com", MEMBER_ROLE)
-    member_headers = await auth_headers(client, "member@example.com")
-    assert (await client.get("/api/v1/auth/me", headers=member_headers)).status_code == 200
+    pimpinan = await create_user("pimpinan@example.com", PIMPINAN_ROLE)
+    pimpinan_headers = await auth_headers(client, "pimpinan@example.com")
+    assert (await client.get("/api/v1/auth/me", headers=pimpinan_headers)).status_code == 200
 
     await client.put(
-        f"/api/v1/users/{member.id}",
+        f"/api/v1/users/{pimpinan.id}",
         headers=admin_headers,
-        json={"full_name": "Member", "is_active": False, "role_ids": []},
+        json={"full_name": "Pimpinan", "is_active": False, "role_ids": []},
     )
 
-    assert (await client.get("/api/v1/auth/me", headers=member_headers)).status_code == 401
-    assert (await login(client, "member@example.com")).status_code == 401
+    assert (await client.get("/api/v1/auth/me", headers=pimpinan_headers)).status_code == 401
+    assert (await login(client, "pimpinan@example.com")).status_code == 401
 
 
 # --- Users --------------------------------------------------------------------------------
@@ -73,7 +73,7 @@ async def _role_id(client: httpx.AsyncClient, headers: Headers, name: str) -> in
 
 
 async def test_admin_manages_users(client: httpx.AsyncClient, admin_headers: Headers) -> None:
-    member_role = await _role_id(client, admin_headers, MEMBER_ROLE)
+    pimpinan_role = await _role_id(client, admin_headers, PIMPINAN_ROLE)
 
     created = await client.post(
         "/api/v1/users",
@@ -82,13 +82,13 @@ async def test_admin_manages_users(client: httpx.AsyncClient, admin_headers: Hea
             "email": "New.User@Example.com",
             "full_name": "New User",
             "password": PASSWORD,
-            "role_ids": [member_role],
+            "role_ids": [pimpinan_role],
         },
     )
     assert created.status_code == 201
     user = created.json()
     assert user["email"] == "new.user@example.com"
-    assert [role["name"] for role in user["roles"]] == [MEMBER_ROLE]
+    assert [role["name"] for role in user["roles"]] == [PIMPINAN_ROLE]
     assert "password" not in created.text
 
     assert (await login(client, "new.user@example.com")).status_code == 200
@@ -138,17 +138,17 @@ async def test_user_creation_validates_password_and_roles(
 async def test_delete_is_soft_and_revokes_sessions(
     client: httpx.AsyncClient, admin_headers: Headers
 ) -> None:
-    member = await create_user("member@example.com", MEMBER_ROLE)
-    await login(client, "member@example.com")
+    pimpinan = await create_user("pimpinan@example.com", PIMPINAN_ROLE)
+    await login(client, "pimpinan@example.com")
 
-    response = await client.delete(f"/api/v1/users/{member.id}", headers=admin_headers)
+    response = await client.delete(f"/api/v1/users/{pimpinan.id}", headers=admin_headers)
 
     assert response.status_code == 204
     assert (
-        await client.get(f"/api/v1/users/{member.id}", headers=admin_headers)
+        await client.get(f"/api/v1/users/{pimpinan.id}", headers=admin_headers)
     ).status_code == 404
     async with get_session_factory()() as db:
-        row = await db.scalar(select(User).where(User.id == member.id))
+        row = await db.scalar(select(User).where(User.id == pimpinan.id))
     assert row is not None
     assert row.deleted_at is not None
     assert row.deleted_by == "admin@example.com"
@@ -177,7 +177,7 @@ async def test_list_contract_pagination_and_sorting(
     client: httpx.AsyncClient, admin_headers: Headers
 ) -> None:
     for index in range(5):
-        await create_user(f"user{index}@example.com", MEMBER_ROLE)
+        await create_user(f"user{index}@example.com", PIMPINAN_ROLE)
 
     page = await client.get(
         "/api/v1/users",
@@ -249,7 +249,7 @@ async def test_role_rejects_unknown_permissions_and_duplicate_names(
     unknown = await client.post(
         "/api/v1/roles", headers=admin_headers, json={"name": "Odd", "permissions": ["nope:nope"]}
     )
-    duplicate = await client.post("/api/v1/roles", headers=admin_headers, json={"name": "MEMBER"})
+    duplicate = await client.post("/api/v1/roles", headers=admin_headers, json={"name": "PIMPINAN"})
 
     assert unknown.status_code == 422
     assert unknown.json()["error"]["message"] == "Kode izin tidak dikenal: nope:nope"
@@ -261,13 +261,13 @@ async def test_system_roles_are_protected(
     client: httpx.AsyncClient, admin_headers: Headers
 ) -> None:
     admin_role = await _role_id(client, admin_headers, ADMIN_ROLE)
-    member_role = await _role_id(client, admin_headers, MEMBER_ROLE)
+    pimpinan_role = await _role_id(client, admin_headers, PIMPINAN_ROLE)
 
     assert (
         await client.delete(f"/api/v1/roles/{admin_role}", headers=admin_headers)
     ).status_code == 409
     rename = await client.put(
-        f"/api/v1/roles/{member_role}", headers=admin_headers, json={"name": "renamed"}
+        f"/api/v1/roles/{pimpinan_role}", headers=admin_headers, json={"name": "renamed"}
     )
     reduce_admin = await client.put(
         f"/api/v1/roles/{admin_role}",
@@ -280,9 +280,9 @@ async def test_system_roles_are_protected(
 
     # Non-name edits to a non-admin system role are allowed.
     tweak = await client.put(
-        f"/api/v1/roles/{member_role}",
+        f"/api/v1/roles/{pimpinan_role}",
         headers=admin_headers,
-        json={"name": MEMBER_ROLE, "permissions": ["roles:read", "roles:create"]},
+        json={"name": PIMPINAN_ROLE, "permissions": ["roles:read", "roles:create"]},
     )
     assert tweak.status_code == 200
 
@@ -290,7 +290,7 @@ async def test_system_roles_are_protected(
 async def test_role_in_use_cannot_be_deleted(
     client: httpx.AsyncClient, admin_headers: Headers
 ) -> None:
-    member_role = await _role_id(client, admin_headers, MEMBER_ROLE)
+    pimpinan_role = await _role_id(client, admin_headers, PIMPINAN_ROLE)
     custom = await client.post("/api/v1/roles", headers=admin_headers, json={"name": "Temp"})
     await client.post(
         "/api/v1/users",
@@ -299,7 +299,7 @@ async def test_role_in_use_cannot_be_deleted(
             "email": "t@example.com",
             "full_name": "T",
             "password": PASSWORD,
-            "role_ids": [custom.json()["id"], member_role],
+            "role_ids": [custom.json()["id"], pimpinan_role],
         },
     )
 

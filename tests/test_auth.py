@@ -2,7 +2,7 @@ import httpx
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.permissions import ADMIN_ROLE, MEMBER_ROLE
+from app.core.permissions import ADMIN_ROLE, PIMPINAN_ROLE
 from app.db.session import get_session_factory
 from app.modules.auth.model import RefreshToken
 
@@ -50,7 +50,7 @@ async def test_wrong_password_and_unknown_email_look_identical(client: httpx.Asy
 
 
 async def test_inactive_user_cannot_log_in(client: httpx.AsyncClient) -> None:
-    await create_user("off@example.com", MEMBER_ROLE, is_active=False)
+    await create_user("off@example.com", PIMPINAN_ROLE, is_active=False)
 
     assert (await login(client, "off@example.com")).status_code == 401
 

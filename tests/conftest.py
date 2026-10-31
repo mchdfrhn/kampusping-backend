@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 
-from app.core.permissions import ADMIN_ROLE, MEMBER_ROLE
+from app.core.permissions import ADMIN_ROLE, PIMPINAN_ROLE, STAF_KEUANGAN_ROLE
 from app.db.base import Base
 from app.db.seed import seed_reference_data
 from app.db.session import get_engine, get_session_factory
@@ -36,6 +36,12 @@ async def admin_headers(client: httpx.AsyncClient) -> dict[str, str]:
 
 
 @pytest.fixture
-async def member_headers(client: httpx.AsyncClient) -> dict[str, str]:
-    await create_user("member@example.com", MEMBER_ROLE)
-    return await auth_headers(client, "member@example.com")
+async def staf_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    await create_user("staf@example.com", STAF_KEUANGAN_ROLE)
+    return await auth_headers(client, "staf@example.com")
+
+
+@pytest.fixture
+async def pimpinan_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    await create_user("pimpinan@example.com", PIMPINAN_ROLE)
+    return await auth_headers(client, "pimpinan@example.com")
