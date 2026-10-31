@@ -4,11 +4,16 @@ python -m app.cli seed                 # sync permissions + system roles, and th
                                        # message templates + schedule rules (first run only)
 python -m app.cli create-admin         # first administrator (prompts / reads INITIAL_ADMIN_*)
 python -m app.cli purge-tokens         # delete expired refresh tokens
+python -m app.cli run-worker [--once]  # the planner + sender loop (exactly one instance);
+                                       # --once runs a single tick and prints its counts
 """
 
 import argparse
 import asyncio
+import contextlib
 import getpass
+import random
+import signal
 import sys
 
 from pydantic import TypeAdapter, ValidationError
@@ -19,10 +24,12 @@ from app.core.security import StrongPassword, hash_password_async
 from app.db.seed import seed_reference_data
 from app.db.session import get_engine, get_session_factory
 from app.modules.auth.repository import RefreshTokenRepository
+from app.modules.messages.runner import run_tick, run_worker
 from app.modules.roles.repository import RoleRepository
 from app.modules.templates.seed import seed_default_templates_and_rules
 from app.modules.users.model import User
 from app.modules.users.repository import UserRepository
+from app.modules.whatsapp.deps import get_provider, reset_provider_cache
 from app.shared.utils import utc_now
 
 
@@ -73,6 +80,55 @@ async def _purge_tokens() -> None:
     print(f"Removed {removed} expired refresh token(s).")
 
 
+def _throttle_jitter(low: int, high: int) -> float:
+    # Throttling jitter between WhatsApp sends, not cryptography.
+    return random.uniform(low, high)  # noqa: S311
+
+
+async def run_worker_command(once: bool) -> str:
+    """Run the worker. With ``once`` run a single tick and return its one-line summary (counts
+    only); otherwise loop until cancelled (SIGTERM, Ctrl+C), which ends in ``CancelledError``.
+
+    Always closes the provider (the gateway's HTTP client) and forgets the cached one.
+    """
+    provider = get_provider()
+    session_factory = get_session_factory()
+    try:
+        if once:
+            report = await run_tick(
+                session_factory=session_factory,
+                provider=provider,
+                clock=utc_now,
+                sleep=asyncio.sleep,
+                jitter=_throttle_jitter,
+            )
+            return f"Worker tick done: {report.summary()}"
+        await run_worker(
+            session_factory=session_factory,
+            provider=provider,
+            clock=utc_now,
+            sleep=asyncio.sleep,
+            jitter=_throttle_jitter,
+            tick_seconds=settings.worker_tick_seconds,
+        )
+        return "Worker stopped."  # pragma: no cover - the loop only ends by cancellation
+    finally:
+        aclose = getattr(provider, "aclose", None)
+        if aclose is not None:
+            await aclose()
+        reset_provider_cache()
+
+
+def _stop_on_sigterm() -> None:
+    """On POSIX make SIGTERM cancel the running task, so ``pm2 stop`` shuts the worker down
+    cleanly. Windows event loops cannot do this; Ctrl+C is handled by ``asyncio.run``."""
+    task = asyncio.current_task()
+    if task is None:  # pragma: no cover - always called from a running task
+        return
+    with contextlib.suppress(NotImplementedError, RuntimeError):  # not on Windows
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, task.cancel)
+
+
 def _resolve_password() -> str:
     if settings.initial_admin_password:
         return settings.initial_admin_password.get_secret_value()
@@ -96,6 +152,13 @@ async def _run(args: argparse.Namespace) -> None:
                 raise SystemExit("Provide --email or set INITIAL_ADMIN_EMAIL.")
             name = args.name or settings.initial_admin_name
             await _create_admin(email, name, _resolve_password())
+        elif args.command == "run-worker":
+            if not args.once:
+                _stop_on_sigterm()
+            try:
+                print(await run_worker_command(args.once))
+            except asyncio.CancelledError:
+                print("Worker stopped.")
     finally:
         await get_engine().dispose()
 
@@ -108,7 +171,12 @@ def main() -> None:
     admin = sub.add_parser("create-admin", help="create the first administrator")
     admin.add_argument("--email")
     admin.add_argument("--name")
-    asyncio.run(_run(parser.parse_args()))
+    worker = sub.add_parser("run-worker", help="run the planner and sender loop")
+    worker.add_argument("--once", action="store_true", help="run one tick, print counts and exit")
+    try:
+        asyncio.run(_run(parser.parse_args()))
+    except KeyboardInterrupt:
+        print("Interrupted.")
 
 
 if __name__ == "__main__":

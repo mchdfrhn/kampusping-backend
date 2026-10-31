@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PM2_CONFIG="${SCRIPT_DIR}/ecosystem.prod.config.js"
 APP_NAME="kampusping-backend"
+WORKER_NAME="kampusping-worker"  # planner + sender loop; must stay a single instance
 APP_PORT=8093
 RUN_NGINX=false
 RUN_MIGRATE=false
@@ -53,8 +54,9 @@ if [[ "${RUN_MIGRATE}" == true ]]; then
   .venv/bin/python -m app.cli seed
 fi
 
-echo "==> PM2: ${APP_NAME}"
+echo "==> PM2: ${APP_NAME}, ${WORKER_NAME}"
 pm2 delete "${APP_NAME}" 2>/dev/null || true
+pm2 delete "${WORKER_NAME}" 2>/dev/null || true
 pm2 start "${PM2_CONFIG}"
 pm2 save
 
@@ -71,3 +73,4 @@ fi
 
 echo "==> Backend deployed"
 pm2 status "${APP_NAME}"
+pm2 status "${WORKER_NAME}"
