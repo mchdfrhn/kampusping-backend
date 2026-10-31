@@ -1,18 +1,17 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.config import settings
+from app.api.deps import get_clock
 from app.db.session import get_session_factory
 from app.modules.audit.model import AuditEvent
 from app.modules.invoices.model import Invoice
 from app.modules.students.model import Student
-from app.shared.clock import local_today
-from app.shared.utils import utc_now
 
 STUDENTS_URL = "/api/v1/students"
 INVOICES_URL = "/api/v1/invoices"
@@ -326,11 +325,28 @@ async def test_invoices_pagination_and_sort_whitelist(
     assert bad_status.status_code == 422
 
 
-async def test_invoice_marked_paid_sets_paid_at_today(
-    client: httpx.AsyncClient, staf_headers: dict[str, str]
+def freeze_clock(app: FastAPI, instant: datetime) -> None:
+    app.dependency_overrides[get_clock] = lambda: lambda: instant
+
+
+@pytest.mark.parametrize(
+    ("instant", "expected_paid_at"),
+    [
+        # 18:00 UTC is already the next day in Jakarta (UTC+7): the local date must win.
+        (datetime(2026, 10, 31, 18, 0, tzinfo=UTC), "2026-11-01"),
+        (datetime(2026, 10, 31, 16, 59, tzinfo=UTC), "2026-10-31"),
+    ],
+)
+async def test_invoice_marked_paid_sets_paid_at_to_local_date(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    staf_headers: dict[str, str],
+    instant: datetime,
+    expected_paid_at: str,
 ) -> None:
     student_id = await make_student("2201", "Budi")
     invoice_id = await make_invoice(student_id, "INV-1")
+    freeze_clock(app, instant)
 
     response = await client.patch(
         f"{INVOICES_URL}/{invoice_id}/status", json={"status": "paid"}, headers=staf_headers
@@ -340,12 +356,43 @@ async def test_invoice_marked_paid_sets_paid_at_today(
     body = response.json()
     assert body["status"] == "paid"
     assert body["paid_via"] is None
-    today = local_today(utc_now(), settings.app_timezone)
-    # tolerate a midnight rollover between the request and this assertion
-    assert body["paid_at"] in {str(today), str(today - timedelta(days=1))}
+    assert body["paid_at"] == expected_paid_at
     events = await audit_events("invoice.status_changed")
     assert len(events) == 1
     assert events[0].detail == {"from": "unpaid", "to": "paid"}
+
+
+async def test_student_phone_update_uses_injected_clock(
+    app: FastAPI, client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    student_id = await make_student("2201", "Budi")
+    instant = datetime(2026, 10, 31, 18, 0, tzinfo=UTC)
+    freeze_clock(app, instant)
+
+    response = await client.patch(
+        f"{STUDENTS_URL}/{student_id}", json={"phone": "0857-1111-2222"}, headers=staf_headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["updated_at"].startswith("2026-10-31T18:00:00")
+
+
+async def test_same_status_patch_leaves_paid_at_untouched(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    student_id = await make_student("2201", "Budi")
+    invoice_id = await make_invoice(
+        student_id, "INV-1", status="paid", paid_via="siakad", paid_at=date(2026, 10, 1)
+    )
+
+    response = await client.patch(
+        f"{INVOICES_URL}/{invoice_id}/status", json={"status": "paid"}, headers=staf_headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["paid_at"] == "2026-10-01"
+    assert response.json()["paid_via"] == "siakad"
+    assert await audit_events("invoice.status_changed") == []
 
 
 async def test_invoice_status_revert_is_audited(

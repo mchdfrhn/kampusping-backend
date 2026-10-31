@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 from app.core.permissions import ADMIN_ROLE, PIMPINAN_ROLE, STAF_KEUANGAN_ROLE
 from app.db.base import Base
@@ -23,8 +24,14 @@ async def database() -> None:
 
 
 @pytest.fixture
-async def client() -> AsyncIterator[httpx.AsyncClient]:
-    transport = httpx.ASGITransport(app=create_app())
+def app() -> FastAPI:
+    """The application under test; tests may set ``app.dependency_overrides`` on it."""
+    return create_app()
+
+
+@pytest.fixture
+async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http:
         yield http
 

@@ -6,6 +6,7 @@ from app.core.constants import NOT_FOUND, VALIDATION_ERROR
 from app.core.exceptions import AppException
 from app.modules.audit.service import record_audit
 from app.modules.users.model import User
+from app.shared.clock import Clock
 from app.shared.pagination import ListParams
 from app.shared.phone import mask_phone, normalize_phone
 from app.shared.utils import utc_now
@@ -21,8 +22,9 @@ from .repository import StudentRepository
 
 
 class StudentService:
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, clock: Clock = utc_now) -> None:
         self.db = db
+        self.clock = clock
         self.students = StudentRepository(db)
 
     async def list(
@@ -67,7 +69,7 @@ class StudentService:
             student.phone = new_phone
             student.phone_status = new_status.value
             student.updated_by = actor.email
-            student.updated_at = utc_now()
+            student.updated_at = self.clock()
 
         if phone_changed:
             await record_audit(

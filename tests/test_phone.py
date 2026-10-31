@@ -37,6 +37,10 @@ def test_normalize_phone_valid(raw: str | int | float, expected: str) -> None:
         float("nan"),
         float("inf"),
         True,
+        -628123456789,  # negative numbers are never phone numbers
+        -6.28123456789e11,
+        pytest.param(10**5000, id="huge-int"),  # beyond Python's int-to-str digit limit
+        pytest.param(-(10**5000), id="huge-negative-int"),
     ],
 )
 def test_normalize_phone_invalid(raw: str | int | float | None) -> None:

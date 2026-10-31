@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import DbSession, require_permissions
+from app.api.deps import ClockDep, DbSession, require_permissions
 from app.core.permissions import INVOICES_READ, INVOICES_UPDATE
 from app.modules.users.model import User
 from app.shared.pagination import ListQuery, Page
@@ -49,7 +49,7 @@ async def list_invoices(
     "/{invoice_id}/status", response_model=InvoiceRead, summary="Mark an invoice paid or unpaid"
 )
 async def update_invoice_status(
-    invoice_id: int, payload: InvoiceStatusUpdate, db: DbSession, actor: CanUpdate
+    invoice_id: int, payload: InvoiceStatusUpdate, db: DbSession, actor: CanUpdate, clock: ClockDep
 ) -> InvoiceRead:
-    invoice = await InvoiceService(db).set_status(invoice_id, payload.status, actor)
+    invoice = await InvoiceService(db, clock).set_status(invoice_id, payload.status, actor)
     return InvoiceRead.model_validate(invoice)

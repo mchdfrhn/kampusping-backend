@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import DbSession, require_permissions
+from app.api.deps import ClockDep, DbSession, require_permissions
 from app.core.permissions import STUDENTS_READ, STUDENTS_UPDATE
 from app.modules.users.model import User
 from app.shared.pagination import ListQuery, Page
@@ -44,7 +44,7 @@ async def get_student(student_id: int, db: DbSession, _: CanRead) -> StudentRead
 
 @router.patch("/{student_id}", response_model=StudentRead, summary="Set or clear the phone number")
 async def update_student_phone(
-    student_id: int, payload: StudentPhoneUpdate, db: DbSession, actor: CanUpdate
+    student_id: int, payload: StudentPhoneUpdate, db: DbSession, actor: CanUpdate, clock: ClockDep
 ) -> StudentRead:
-    student = await StudentService(db).update_phone(student_id, payload.phone, actor)
+    student = await StudentService(db, clock).update_phone(student_id, payload.phone, actor)
     return StudentRead.model_validate(student)

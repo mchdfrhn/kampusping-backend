@@ -10,6 +10,8 @@ from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.modules.users.model import User
 from app.modules.users.repository import UserRepository
+from app.shared.clock import Clock
+from app.shared.utils import utc_now
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -33,6 +35,14 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_clock() -> Clock:
+    """The time source services use. Tests override this dependency to freeze time."""
+    return utc_now
+
+
+ClockDep = Annotated[Clock, Depends(get_clock)]
 
 
 def require_permissions(*codes: str):

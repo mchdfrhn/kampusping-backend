@@ -19,12 +19,16 @@ def normalize_phone(raw: str | int | float | None) -> str | None:
     """
     if raw is None or isinstance(raw, bool):
         return None
+    if isinstance(raw, int | float) and raw < 0:
+        return None
     if isinstance(raw, float):
         if not math.isfinite(raw) or not raw.is_integer():
             return None
-        text = str(int(raw))
-    else:
+        raw = int(raw)
+    try:
         text = str(raw)
+    except ValueError:  # an int beyond Python's int-to-str digit limit
+        return None
 
     digits = _NON_DIGITS.sub("", text)
     if digits.startswith("62"):
