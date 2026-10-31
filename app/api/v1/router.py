@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
+from app.modules.dashboard.router import router as dashboard_router
 from app.modules.imports.router import router as imports_router
 from app.modules.invoices.router import router as invoices_router
 from app.modules.messages.router import router as messages_router
@@ -29,5 +30,6 @@ router.include_router(whatsapp_router)
 router.include_router(webhook_router)
 router.include_router(settings_router)
 router.include_router(audit_router)
+router.include_router(dashboard_router)
 
 __all__ = ["router"]
