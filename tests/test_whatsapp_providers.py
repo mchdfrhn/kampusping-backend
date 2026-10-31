@@ -458,13 +458,6 @@ def test_signature_known_vector() -> None:
 # --- get_provider --------------------------------------------------------------------------
 
 
-@pytest.fixture
-def clean_provider_cache():
-    reset_provider_cache()
-    yield
-    reset_provider_cache()
-
-
 @pytest.mark.parametrize("run", [1, 2])
 async def test_process_wide_fake_provider_starts_empty_in_every_test(run: int) -> None:
     provider = get_provider()
@@ -473,7 +466,7 @@ async def test_process_wide_fake_provider_starts_empty_in_every_test(run: int) -
     await provider.send(phone=PHONE, text="x", client_ref=f"leak-{run}")
 
 
-def test_get_provider_returns_cached_fake_by_default(clean_provider_cache: None) -> None:
+def test_get_provider_returns_cached_fake_by_default() -> None:
     assert settings.wa_provider == "fake"
     provider = get_provider()
     assert isinstance(provider, FakeProvider)
@@ -483,9 +476,7 @@ def test_get_provider_returns_cached_fake_by_default(clean_provider_cache: None)
     assert get_provider() is not provider
 
 
-def test_get_provider_builds_gateway_from_settings(
-    monkeypatch: pytest.MonkeyPatch, clean_provider_cache: None
-) -> None:
+def test_get_provider_builds_gateway_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "wa_provider", "gateway")
     monkeypatch.setattr(settings, "wa_gateway_url", "http://gw.internal:8095")
     monkeypatch.setattr(settings, "wa_gateway_api_key", SecretStr("abc"))
@@ -500,7 +491,6 @@ def test_get_provider_builds_gateway_from_settings(
 )
 def test_get_provider_gateway_misconfiguration_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
-    clean_provider_cache: None,
     url: str,
     key: SecretStr | None,
 ) -> None:

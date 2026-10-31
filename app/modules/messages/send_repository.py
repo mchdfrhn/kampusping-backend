@@ -41,7 +41,9 @@ def auto_message_busy(
     """True when the student already has another automatic message today (AB-03).
 
     "Today" is the local-day interval ``[day_start, day_end)`` in UTC. A message that is being
-    sent right now (``sending``) also counts, so two workers never send to one student at once.
+    sent right now (``sending``) also counts. This check is only safe with a single worker: a
+    second worker is unsupported (ADR 0003), because two of them could both pass the check
+    before either records its message.
     """
     other = aliased(Message)
     return exists().where(
@@ -64,14 +66,23 @@ class SendRepository:
         self.db = db
 
     async def count_sent_between(self, start: datetime, end: datetime) -> int:
-        """Messages handed to the provider in ``[start, end)``: the daily cap counter."""
+        """Messages handed to the provider in ``[start, end)``: the daily cap counter.
+
+        A message in ``sending`` counts whatever its ``sent_at`` (that is only written when the
+        outcome is recorded), like the AB-03 predicate; the other statuses count by ``sent_at``.
+        """
         count = await self.db.scalar(
             select(func.count())
             .select_from(Message)
             .where(
-                Message.status.in_(SENT_STATUSES),
-                Message.sent_at >= start,
-                Message.sent_at < end,
+                or_(
+                    Message.status == MessageStatus.SENDING.value,
+                    and_(
+                        Message.status.in_(SENT_STATUSES),
+                        Message.sent_at >= start,
+                        Message.sent_at < end,
+                    ),
+                )
             )
         )
         return count or 0
@@ -110,10 +121,17 @@ class SendRepository:
         return await self.db.scalar(stmt)
 
     async def claim(self, message_id: int, *, now: datetime) -> bool:
-        """``queued -> sending`` for exactly this message; False when someone else won."""
+        """``queued -> sending`` for exactly this message; False when someone else won.
+
+        A soft-deleted message is never claimed.
+        """
         result = await self.db.execute(
             update(Message)
-            .where(Message.id == message_id, Message.status == MessageStatus.QUEUED.value)
+            .where(
+                Message.id == message_id,
+                Message.status == MessageStatus.QUEUED.value,
+                Message.deleted_at.is_(None),
+            )
             .values(status=MessageStatus.SENDING.value, updated_at=now, updated_by=SYSTEM_ACTOR)
             .execution_options(synchronize_session=False)
         )
@@ -132,6 +150,20 @@ class SendRepository:
             .values(updated_at=now, updated_by=SYSTEM_ACTOR, **values)
             .execution_options(synchronize_session=False)
         )
+
+    async def record_outcome(self, message_id: int, *, now: datetime, **values: Any) -> bool:
+        """Write the outcome of a provider call, only while the message is still ``sending``.
+
+        Returns False (and writes nothing) when someone else changed the message in the
+        meantime, for example staff cancelled it while the provider call was in flight.
+        """
+        result = await self.db.execute(
+            update(Message)
+            .where(Message.id == message_id, Message.status == MessageStatus.SENDING.value)
+            .values(updated_at=now, updated_by=SYSTEM_ACTOR, **values)
+            .execution_options(synchronize_session=False)
+        )
+        return _rowcount(result) == 1
 
     async def fail_unprocessed(self, message_id: int, *, now: datetime, error: str) -> None:
         """Mark a message that hit an internal error ``failed`` unless it already moved on."""

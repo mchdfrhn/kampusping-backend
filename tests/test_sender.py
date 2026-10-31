@@ -15,6 +15,7 @@ from app.db.session import get_session_factory
 from app.modules.invoices.model import Invoice
 from app.modules.messages import sender
 from app.modules.messages.model import Message
+from app.modules.messages.send_repository import SendRepository
 from app.modules.messages.sender import run_send_phase, send_next
 from app.modules.settings.model import AppSettings
 from app.modules.settings.service import SettingsService
@@ -746,13 +747,12 @@ async def test_provider_unavailable_counts_towards_the_breaker() -> None:
 async def test_success_resets_consecutive_failures() -> None:
     await configure(consecutive_failures=4)
     await queued_message()
-    failing = await queued_message()
     fake = FakeProvider()
 
-    assert await run(fake) == 2
+    assert await run(fake) == 1
     assert (await get_settings()).consecutive_failures == 0
 
-    await update_row(Message, failing, status="queued")
+    await queued_message()  # a fresh message that fails: the counter starts again from zero
     fake.fail_next(RuntimeError("boom"))
     assert await run(fake) == 1
     settings = await get_settings()
@@ -761,17 +761,18 @@ async def test_success_resets_consecutive_failures() -> None:
 
 
 async def test_attempts_incremented_once_per_provider_call() -> None:
-    succeeds = await queued_message()
-    retried = await queued_message()
     fake = FakeProvider()
+    succeeds = await queued_message()
 
-    assert await run(fake) == 2
+    assert await run(fake) == 1
     assert (await get_message(succeeds)).attempts == 1
-    assert (await get_message(retried)).attempts == 1
 
-    await update_row(Message, retried, status="queued")
-    fake.fail_next(RuntimeError("boom"))
+    retried = await queued_message()  # fails twice, then goes through on the third call
+    fake.fail_next(RuntimeError("boom"), times=2)
     clock = FakeClock(NOW)
+    assert await run(fake, clock) == 1
+    assert (await get_message(retried)).attempts == 1
+    clock.now += timedelta(minutes=5)
     assert await run(fake, clock) == 1
     assert (await get_message(retried)).attempts == 2
     clock.now += timedelta(minutes=15)
@@ -779,6 +780,7 @@ async def test_attempts_incremented_once_per_provider_call() -> None:
     message = await get_message(retried)
     assert message.status == "sent"
     assert message.attempts == 3
+    assert (await get_message(succeeds)).attempts == 1  # untouched by the other message's retries
 
 
 async def test_stale_sending_message_is_requeued_after_10_minutes_unless_provider_id_set() -> None:
@@ -861,14 +863,214 @@ async def test_phone_is_never_logged_unmasked(caplog: pytest.LogCaptureFixture) 
         assert phone[-4:] in logged
 
 
+# --- Daily cap and soft deletes ------------------------------------------------------------
+
+
+async def test_daily_cap_counts_a_sending_message_without_sent_at() -> None:
+    await configure(daily_cap=1)
+    other = await add_student()
+    other_invoice = await add_invoice(other)
+    # In flight right now: ``sent_at`` is only written when the outcome is recorded.
+    await add_message(other_invoice, other, status="sending", updated_at=NOW)
+    waiting = await queued_message()
+    fake = FakeProvider()
+
+    assert await run(fake) == 0
+    assert fake.sent == []
+    assert (await get_message(waiting)).status == "queued"
+
+
+async def test_soft_deleted_message_is_never_sent() -> None:
+    message_id = await queued_message(deleted_at=NOW - timedelta(hours=1))
+    fake = FakeProvider()
+
+    assert await run(fake) == 0
+    assert fake.sent == []
+    assert (await get_message(message_id)).status == "queued"
+
+
+async def test_claim_refuses_a_soft_deleted_message() -> None:
+    message_id = await queued_message(deleted_at=NOW - timedelta(hours=1))
+
+    async with get_session_factory()() as db:
+        assert await SendRepository(db).claim(message_id, now=NOW) is False
+        await db.commit()
+
+    assert (await get_message(message_id)).status == "queued"
+
+
+async def test_candidate_query_excludes_soft_deleted_messages() -> None:
+    deleted = await queued_message(deleted_at=NOW - timedelta(hours=1))  # lowest id: would win
+    live = await queued_message()
+    day = (NOW - timedelta(hours=10), NOW + timedelta(hours=14))
+
+    async with get_session_factory()() as db:
+        repo = SendRepository(db)
+        picked = await repo.next_candidate(now=NOW, today=TODAY, day_start=day[0], day_end=day[1])
+        assert picked == live
+        assert picked != deleted
+        await update_row(Message, live, deleted_at=NOW)
+        assert (
+            await SendRepository(db).next_candidate(
+                now=NOW, today=TODAY, day_start=day[0], day_end=day[1]
+            )
+            is None
+        )
+
+
+# --- Outcome writes never overwrite someone else's state -----------------------------------
+
+
+async def test_success_outcome_does_not_overwrite_a_cancelled_message(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    message_id = await queued_message()
+    fake = FakeProvider()
+    original = fake.send
+
+    async def cancel_then_send(**kwargs: Any) -> Any:
+        await update_row(Message, message_id, status="cancelled", cancel_reason="manual")
+        return await original(**kwargs)
+
+    monkeypatch.setattr(fake, "send", cancel_then_send)
+    caplog.set_level(logging.WARNING, logger="app.modules.messages.sender")
+
+    assert await run(fake) == 1  # the phase carries on; nothing raised
+
+    message = await get_message(message_id)
+    assert message.status == "cancelled"
+    assert message.cancel_reason == "manual"
+    assert message.sent_at is None
+    assert message.provider_message_id is None
+    assert message.attempts == 0
+    assert any(
+        record.levelno == logging.WARNING and f"message {message_id}" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def test_failure_outcome_does_not_overwrite_a_cancelled_message(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    message_id = await queued_message()
+    fake = FakeProvider()
+
+    async def cancel_then_fail(**kwargs: Any) -> Any:
+        await update_row(Message, message_id, status="cancelled", cancel_reason="manual")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(fake, "send", cancel_then_fail)
+    caplog.set_level(logging.WARNING, logger="app.modules.messages.sender")
+
+    assert await run(fake) == 1
+
+    message = await get_message(message_id)
+    assert message.status == "cancelled"
+    assert message.attempts == 0
+    assert message.error is None
+    assert message.next_attempt_at is None
+    assert any(
+        record.levelno == logging.WARNING and f"message {message_id}" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 # --- Concurrency ---------------------------------------------------------------------------
 
 
-async def test_claim_is_atomic(tmp_path: Path) -> None:
-    """Two workers race for the same messages.
+async def test_claim_is_atomic() -> None:
+    """The same message claimed from two sessions: exactly one claim wins."""
+    message_id = await queued_message()
+    factory = get_session_factory()
 
-    The shared in-memory test engine uses one connection (StaticPool), which cannot show real
-    concurrency, so this test runs on a file-backed SQLite database with its own engine.
+    async with factory() as first, factory() as second:
+        assert await SendRepository(first).claim(message_id, now=NOW) is True
+        await first.commit()
+        assert await SendRepository(second).claim(message_id, now=NOW) is False
+        await second.commit()
+
+    assert (await get_message(message_id)).status == "sending"
+
+
+async def test_lost_claim_moves_on_to_the_next_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    taken = await queued_message(status="sending", updated_at=NOW)  # another worker's message
+    free = await queued_message()
+    original = SendRepository.next_candidate
+    calls: list[int] = []
+
+    async def racy(self: SendRepository, **kwargs: Any) -> int | None:
+        calls.append(1)
+        if len(calls) == 1:
+            return taken  # the candidate query saw it as queued a moment ago
+        return await original(self, **kwargs)
+
+    monkeypatch.setattr(SendRepository, "next_candidate", racy)
+    fake = FakeProvider()
+
+    outcome = await send_next(
+        get_session_factory(), fake, now=NOW, sleep=Sleeper(), jitter=Jitter()
+    )
+
+    assert outcome == "sent"
+    assert [sent.client_ref for sent in fake.sent] == [f"msg-{free}"]
+    assert (await get_message(taken)).status == "sending"  # not touched by this worker
+    assert (await get_message(taken)).attempts == 0
+
+
+async def test_claim_that_is_always_lost_ends_the_step_as_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    taken = await queued_message(status="sending", updated_at=NOW)
+    calls: list[int] = []
+
+    async def always_taken(self: SendRepository, **kwargs: Any) -> int | None:
+        calls.append(1)
+        return taken
+
+    monkeypatch.setattr(SendRepository, "next_candidate", always_taken)
+    fake = FakeProvider()
+
+    outcome = await send_next(
+        get_session_factory(), fake, now=NOW, sleep=Sleeper(), jitter=Jitter()
+    )
+
+    assert outcome == "idle"
+    assert len(calls) == 5  # gave up after the bounded number of tries
+    assert fake.sent == []
+
+
+async def test_second_automatic_message_claimed_in_a_race_is_deferred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    student_id = await add_student()
+    first_invoice = await add_invoice(student_id, due=date(2026, 11, 10))
+    second_invoice = await add_invoice(student_id, due=date(2026, 11, 12))
+    await add_message(first_invoice, student_id, status="sent", sent_at=NOW - timedelta(hours=1))
+    waiting = await add_message(second_invoice, student_id)
+
+    async def stale_view(self: SendRepository, **kwargs: Any) -> int | None:
+        return waiting  # as if the first message was sent just after the candidate query ran
+
+    monkeypatch.setattr(SendRepository, "next_candidate", stale_view)
+    fake = FakeProvider()
+
+    outcome = await send_next(
+        get_session_factory(), fake, now=NOW, sleep=Sleeper(), jitter=Jitter()
+    )
+
+    assert outcome == "deferred"
+    assert fake.sent == []
+    message = await get_message(waiting)
+    assert message.status == "queued"
+    assert message.attempts == 0
+    assert message.cancel_reason is None
+
+
+async def test_concurrent_send_next_calls_never_send_a_message_twice(tmp_path: Path) -> None:
+    """Four callers on a file-backed SQLite database (the in-memory test engine shares one
+    connection, which cannot show real concurrency): every message goes out exactly once.
+
+    This relies on timing, so the deterministic claim tests above are the real proof.
     """
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'claim.db'}")
     try:

@@ -304,7 +304,7 @@ async def _deliver(
 async def _record_success(
     repo: SendRepository, ready: _Ready, result: SendResult, *, now: datetime
 ) -> _Step:
-    await repo.update_message(
+    recorded = await repo.record_outcome(
         ready.message_id,
         now=now,
         status=MessageStatus.SENT.value,
@@ -314,6 +314,8 @@ async def _record_success(
         error=None,
         next_attempt_at=None,
     )
+    if not recorded:
+        return _outcome_not_recorded(ready, "sent")
     await repo.reset_failures()
     logger.info("Send phase: message %s sent to %s", ready.message_id, mask_phone(ready.phone))
     return _Step("sent", called_provider=True)
@@ -330,14 +332,18 @@ async def _record_failure(
     masked = mask_phone(ready.phone)
     if isinstance(exc, ProviderUnavailable):
         # Not the message's fault: no attempt is burned and the phase stops for this tick.
-        await repo.update_message(ready.message_id, now=now, status=MessageStatus.QUEUED.value)
+        recorded = await repo.record_outcome(
+            ready.message_id, now=now, status=MessageStatus.QUEUED.value
+        )
+        if not recorded:
+            return _outcome_not_recorded(ready, "retry", stop=True)
         await _count_failure(repo, settings, now=now)
         logger.warning("Send phase: provider unavailable for message %s", ready.message_id)
         return _Step("retry", stop=True, called_provider=True)
 
     attempts = ready.attempts + 1
     if isinstance(exc, NotOnWhatsApp):
-        await repo.update_message(
+        recorded = await repo.record_outcome(
             ready.message_id,
             now=now,
             status=MessageStatus.FAILED.value,
@@ -345,6 +351,8 @@ async def _record_failure(
             attempts=attempts,
             next_attempt_at=None,
         )
+        if not recorded:
+            return _outcome_not_recorded(ready, "failed")
         await repo.mark_phone_invalid(ready.student_id, now=now)
         logger.info("Send phase: %s is not on WhatsApp (message %s)", masked, ready.message_id)
         return _Step("failed", called_provider=True)
@@ -354,7 +362,7 @@ async def _record_failure(
     error = ERROR_REJECTED if rejected else short_error(exc)
     if not rejected and attempts < settings.max_attempts:
         delay = RETRY_DELAYS_MINUTES[min(attempts, len(RETRY_DELAYS_MINUTES)) - 1]
-        await repo.update_message(
+        recorded = await repo.record_outcome(
             ready.message_id,
             now=now,
             status=MessageStatus.QUEUED.value,
@@ -364,7 +372,7 @@ async def _record_failure(
         )
         outcome: SendOutcome = "retry"
     else:
-        await repo.update_message(
+        recorded = await repo.record_outcome(
             ready.message_id,
             now=now,
             status=MessageStatus.FAILED.value,
@@ -373,6 +381,8 @@ async def _record_failure(
             next_attempt_at=None,
         )
         outcome = "failed"
+    if not recorded:
+        return _outcome_not_recorded(ready, outcome)
     logger.warning(
         "Send phase: message %s to %s failed (%s), attempt %s",
         ready.message_id,
@@ -382,6 +392,18 @@ async def _record_failure(
     )
     tripped = await _count_failure(repo, settings, now=now)
     return _Step(outcome, stop=tripped, called_provider=True)
+
+
+def _outcome_not_recorded(ready: _Ready, outcome: SendOutcome, *, stop: bool = False) -> _Step:
+    """The message left ``sending`` while the provider call was in flight (for example staff
+    cancelled it): keep the other party's state, skip every follow-up write (counters, phone
+    flag) and carry on. ``outcome`` is what happened at the provider."""
+    logger.warning(
+        "Send phase: message %s is no longer sending; its %s outcome was not recorded",
+        ready.message_id,
+        outcome,
+    )
+    return _Step(outcome, stop=stop, called_provider=True)
 
 
 async def _count_failure(repo: SendRepository, settings: SendSettings, *, now: datetime) -> bool:
