@@ -10,9 +10,10 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import AuditedModel
+from app.modules.students.model import Student
 from app.shared.utils import utc_now
 
 from .constants import MessageStatus
@@ -54,3 +55,7 @@ class Message(AuditedModel):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Never loaded implicitly: the sender and the planner do not need it, and the message log
+    # asks for it with ``selectinload`` so a page of rows costs one extra query, not one per row.
+    student: Mapped[Student] = relationship(lazy="raise_on_sql")

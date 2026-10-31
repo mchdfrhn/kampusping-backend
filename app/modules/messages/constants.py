@@ -57,3 +57,12 @@ ERROR_TOO_LONG = "Pesan terlalu panjang."
 ERROR_NOT_ON_WHATSAPP = "Nomor tidak terdaftar di WhatsApp."
 ERROR_REJECTED = "Permintaan ditolak gateway."
 ERROR_INTERNAL = "Terjadi kesalahan internal saat memproses pesan."
+
+# --- Message log and delivery receipts -----------------------------------------------------
+
+AUDIT_MESSAGE_CANCELLED = "message.cancelled"
+AUDIT_ENTITY_MESSAGE = "message"
+WEBHOOK_ACTOR = "whatsapp-webhook"
+ERROR_DELIVERY_FAILED = "Gagal terkirim ke WhatsApp."
+MSG_NOT_FOUND = "Pesan tidak ditemukan."
+MSG_ONLY_QUEUED_CANCELLABLE = "Hanya pesan berstatus antre yang dapat dibatalkan."
