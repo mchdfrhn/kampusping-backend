@@ -1,16 +1,40 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import httpx
 import pytest
+from argon2 import PasswordHasher
 from fastapi import FastAPI
 
+from app.core import security
 from app.core.permissions import ADMIN_ROLE, PIMPINAN_ROLE, STAF_KEUANGAN_ROLE
 from app.db.base import Base
 from app.db.seed import seed_reference_data
 from app.db.session import get_engine, get_session_factory
 from app.main import create_app
+from app.modules.auth import service as auth_service
 
 from .helpers import auth_headers, create_user
+
+
+@pytest.fixture(scope="session")
+def production_hasher() -> PasswordHasher:
+    """The argon2 hasher exactly as the application builds it (before any test swap)."""
+    return security._hasher
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cheap_password_hashing(production_hasher: PasswordHasher) -> Iterator[None]:
+    """Hash passwords with minimal argon2 cost in tests only (the suite hashes in every test).
+
+    Production parameters live in ``app.core.security`` and are untouched; a test asserts them.
+    """
+    cheap = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
+    original_dummy = auth_service.DUMMY_PASSWORD_HASH
+    security._hasher = cheap
+    auth_service.DUMMY_PASSWORD_HASH = cheap.hash("not-a-real-password")
+    yield
+    security._hasher = production_hasher
+    auth_service.DUMMY_PASSWORD_HASH = original_dummy
 
 
 @pytest.fixture(autouse=True)

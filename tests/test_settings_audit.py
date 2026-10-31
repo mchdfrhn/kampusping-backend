@@ -10,7 +10,9 @@ from app.core.config import Settings
 from app.db.session import get_session_factory
 from app.modules.audit.model import AuditEvent
 from app.modules.audit.service import record_audit
+from app.modules.settings.constants import SETTINGS_ROW_ID
 from app.modules.settings.model import AppSettings
+from app.modules.settings.service import SettingsService
 from app.shared.clock import local_now, local_today
 
 SETTINGS_URL = "/api/v1/settings"
@@ -117,6 +119,22 @@ async def test_validation_messages_are_indonesian(
 
     messages = [detail["message"] for detail in response.json()["error"]["details"]]
     assert "Jam mulai harus lebih awal dari jam selesai." in messages
+
+
+@pytest.mark.parametrize("field", ["window_start", "window_end"])
+async def test_window_times_with_timezone_are_rejected_not_a_500(
+    client: httpx.AsyncClient, admin_headers: dict[str, str], field: str
+) -> None:
+    response = await client.put(
+        SETTINGS_URL, json=valid_payload(**{field: "17:00+07:00"}), headers=admin_headers
+    )
+
+    assert response.status_code == 422
+    details = response.json()["error"]["details"]
+    assert any(
+        field in detail["loc"] and detail["message"] == "Jam harus tanpa zona waktu."
+        for detail in details
+    )
 
 
 async def test_settings_require_permissions(
@@ -254,6 +272,44 @@ async def test_record_audit_flushes_without_committing() -> None:
         assert event is not None
         assert event.entity_id == "7"
         assert event.at is not None
+
+
+async def test_get_creates_the_default_row_once() -> None:
+    async with get_session_factory()() as db:
+        first = await SettingsService(db).get()
+        second = await SettingsService(db).get()
+        assert first is second
+        await db.commit()
+    async with get_session_factory()() as db:
+        assert len((await db.scalars(select(AppSettings))).all()) == 1
+
+
+async def test_get_survives_losing_the_first_access_race(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Another session inserts the row between our existence check and our own insert."""
+    async with get_session_factory()() as loser:
+        real_get = loser.get
+        raced = False
+
+        async def get_then_lose_the_race(*args: Any, **kwargs: Any) -> Any:
+            nonlocal raced
+            found = await real_get(*args, **kwargs)
+            if found is None and not raced:
+                raced = True
+                async with get_session_factory()() as winner:
+                    winner.add(AppSettings(id=SETTINGS_ROW_ID, campus_name="Pemenang"))
+                    await winner.commit()
+            return found
+
+        monkeypatch.setattr(loser, "get", get_then_lose_the_race)
+
+        row = await SettingsService(loser).get()  # must not raise IntegrityError
+
+        assert raced
+        assert row.id == SETTINGS_ROW_ID
+        assert row.campus_name == "Pemenang"
+        await loser.commit()
+    async with get_session_factory()() as db:
+        assert len((await db.scalars(select(AppSettings))).all()) == 1
 
 
 def test_local_today_crosses_midnight_in_jakarta() -> None:

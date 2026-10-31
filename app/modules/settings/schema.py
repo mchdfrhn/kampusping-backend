@@ -57,6 +57,14 @@ class SettingsWrite(BaseModel):
             raise ValueError("Hari kerja tidak boleh duplikat.")
         return sorted(value)
 
+    @field_validator("window_start", "window_end")
+    @classmethod
+    def window_must_be_naive(cls, value: time) -> time:
+        # The window is local wall-clock time; an offset would make the comparison below raise.
+        if value.tzinfo is not None:
+            raise ValueError("Jam harus tanpa zona waktu.")
+        return value
+
     # Cross-field checks live on the later field so the error points at it (``loc``).
     @field_validator("window_end")
     @classmethod

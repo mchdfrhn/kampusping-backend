@@ -2,7 +2,9 @@ from datetime import timedelta
 
 import jwt
 import pytest
+from argon2 import PasswordHasher
 
+from app.core import security
 from app.core.config import settings
 from app.core.exceptions import AppException
 from app.core.security import (
@@ -16,6 +18,17 @@ from app.core.security import (
     verify_password,
 )
 from app.shared.utils import like_pattern, utc_now
+
+
+def test_production_hasher_keeps_the_default_argon2_parameters(
+    production_hasher: PasswordHasher,
+) -> None:
+    # Tests run with a cheap hasher (see conftest); production must keep the strong defaults.
+    assert production_hasher.time_cost == 3
+    assert production_hasher.memory_cost == 65536
+    assert production_hasher.parallelism == 4
+    assert production_hasher.hash("Correct-horse-9").startswith("$argon2id$v=19$m=65536,t=3,p=4$")
+    assert production_hasher is not security._hasher  # the suite really runs on the cheap one
 
 
 def test_password_hash_roundtrip() -> None:
