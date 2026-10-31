@@ -16,7 +16,9 @@ from app.core.config import settings
 @lru_cache
 def get_engine() -> AsyncEngine:
     """Created lazily so importing the app never opens a connection."""
-    kwargs: dict[str, Any] = {"echo": settings.database_echo}
+    # hide_parameters: SQL errors must not print bound values (student names, phones, NIM) into
+    # the logs (UU PDP).
+    kwargs: dict[str, Any] = {"echo": settings.database_echo, "hide_parameters": True}
     if settings.database_url.startswith("sqlite"):
         if ":memory:" in settings.database_url:
             kwargs.update(poolclass=StaticPool, connect_args={"check_same_thread": False})

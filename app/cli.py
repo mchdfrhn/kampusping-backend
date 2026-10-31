@@ -85,11 +85,15 @@ def _throttle_jitter(low: int, high: int) -> float:
     return random.uniform(low, high)  # noqa: S311
 
 
-async def run_worker_command(once: bool) -> str:
-    """Run the worker. With ``once`` run a single tick and return its one-line summary (counts
-    only); otherwise loop until cancelled (SIGTERM, Ctrl+C), which ends in ``CancelledError``.
+async def run_worker_command(once: bool) -> tuple[str, int]:
+    """Run the worker; returns ``(message, exit_code)``.
 
-    Always closes the provider (the gateway's HTTP client) and forgets the cached one.
+    With ``once`` it runs a single tick and returns its one-line summary (counts only) with exit
+    code 1 when planning or the send phase failed, else 0. Otherwise it loops until cancelled
+    (SIGTERM, Ctrl+C), which ends in ``CancelledError``.
+
+    Always closes the provider (the gateway's HTTP client) and forgets the cached one, even if
+    closing it fails.
     """
     provider = get_provider()
     session_factory = get_session_factory()
@@ -102,7 +106,7 @@ async def run_worker_command(once: bool) -> str:
                 sleep=asyncio.sleep,
                 jitter=_throttle_jitter,
             )
-            return f"Worker tick done: {report.summary()}"
+            return f"Worker tick done: {report.summary()}", 1 if report.failed else 0
         await run_worker(
             session_factory=session_factory,
             provider=provider,
@@ -111,12 +115,14 @@ async def run_worker_command(once: bool) -> str:
             jitter=_throttle_jitter,
             tick_seconds=settings.worker_tick_seconds,
         )
-        return "Worker stopped."  # pragma: no cover - the loop only ends by cancellation
+        return "Worker stopped.", 0  # pragma: no cover - the loop only ends by cancellation
     finally:
-        aclose = getattr(provider, "aclose", None)
-        if aclose is not None:
-            await aclose()
-        reset_provider_cache()
+        try:
+            aclose = getattr(provider, "aclose", None)
+            if aclose is not None:
+                await aclose()
+        finally:
+            reset_provider_cache()
 
 
 def _stop_on_sigterm() -> None:
@@ -156,9 +162,12 @@ async def _run(args: argparse.Namespace) -> None:
             if not args.once:
                 _stop_on_sigterm()
             try:
-                print(await run_worker_command(args.once))
+                message, code = await run_worker_command(args.once)
             except asyncio.CancelledError:
-                print("Worker stopped.")
+                message, code = "Worker stopped.", 0
+            print(message)
+            if code:
+                raise SystemExit(code)
     finally:
         await get_engine().dispose()
 

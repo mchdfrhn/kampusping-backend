@@ -314,9 +314,9 @@ async def _record_success(
         error=None,
         next_attempt_at=None,
     )
+    await repo.reset_failures()  # describes the provider, not the message row
     if not recorded:
         return _outcome_not_recorded(ready, "sent")
-    await repo.reset_failures()
     logger.info("Send phase: message %s sent to %s", ready.message_id, mask_phone(ready.phone))
     return _Step("sent", called_provider=True)
 
@@ -335,9 +335,9 @@ async def _record_failure(
         recorded = await repo.record_outcome(
             ready.message_id, now=now, status=MessageStatus.QUEUED.value
         )
+        await _count_failure(repo, settings, now=now)
         if not recorded:
             return _outcome_not_recorded(ready, "retry", stop=True)
-        await _count_failure(repo, settings, now=now)
         logger.warning("Send phase: provider unavailable for message %s", ready.message_id)
         return _Step("retry", stop=True, called_provider=True)
 
@@ -351,9 +351,9 @@ async def _record_failure(
             attempts=attempts,
             next_attempt_at=None,
         )
+        await repo.mark_phone_invalid(ready.student_id, now=now)  # a fact about the phone
         if not recorded:
             return _outcome_not_recorded(ready, "failed")
-        await repo.mark_phone_invalid(ready.student_id, now=now)
         logger.info("Send phase: %s is not on WhatsApp (message %s)", masked, ready.message_id)
         return _Step("failed", called_provider=True)
 
@@ -381,8 +381,9 @@ async def _record_failure(
             next_attempt_at=None,
         )
         outcome = "failed"
+    tripped = await _count_failure(repo, settings, now=now)  # describes the provider
     if not recorded:
-        return _outcome_not_recorded(ready, outcome)
+        return _outcome_not_recorded(ready, outcome, stop=tripped)
     logger.warning(
         "Send phase: message %s to %s failed (%s), attempt %s",
         ready.message_id,
@@ -390,14 +391,14 @@ async def _record_failure(
         type(exc).__name__,
         attempts,
     )
-    tripped = await _count_failure(repo, settings, now=now)
     return _Step(outcome, stop=tripped, called_provider=True)
 
 
 def _outcome_not_recorded(ready: _Ready, outcome: SendOutcome, *, stop: bool = False) -> _Step:
     """The message left ``sending`` while the provider call was in flight (for example staff
-    cancelled it): keep the other party's state, skip every follow-up write (counters, phone
-    flag) and carry on. ``outcome`` is what happened at the provider."""
+    cancelled it): keep the other party's state and carry on. Only the message-row write is
+    skipped; the failure counter and the phone flag describe the provider and the phone, so the
+    callers still write them. ``outcome`` is what happened at the provider."""
     logger.warning(
         "Send phase: message %s is no longer sending; its %s outcome was not recorded",
         ready.message_id,

@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -161,24 +162,25 @@ async def test_exception_in_plan_does_not_kill_the_loop(
     await add_rule(offset=0)
 
     original = runner.plan_messages
-    calls: list[int] = []
+    provider = FakeProvider()
+    sent_when_planning: list[int] = []  # messages already sent at the start of each plan call
 
     async def flaky(db: AsyncSession, *, now: datetime) -> PlanReport:
-        calls.append(1)
-        if len(calls) == 1:
+        sent_when_planning.append(len(provider.sent))
+        if len(sent_when_planning) == 1:
             raise RuntimeError("database hiccup")
         return await original(db, now=now)
 
     monkeypatch.setattr(runner, "plan_messages", flaky)
-    provider = FakeProvider()
     sleep = RecordingSleep(stop_after=2)
     caplog.set_level(logging.INFO, logger="app.modules.messages.runner")
 
     with pytest.raises(asyncio.CancelledError):
         await worker(provider, sleep)
 
-    assert len(calls) == 2
-    assert len(provider.sent) == 2  # tick 1: the manual one despite the plan failure; tick 2: B
+    # Tick 2 starts with A already sent: tick 1's send phase ran although its planning failed.
+    assert sent_when_planning == [0, 1]
+    assert len(provider.sent) == 2  # A in tick 1, B (planned by tick 2) in tick 2
     assert any(record.levelno == logging.ERROR and record.exc_info for record in caplog.records), (
         "the planning failure is logged with its traceback"
     )
@@ -207,7 +209,7 @@ async def test_stops_on_cancellation() -> None:
     task.cancel()
 
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, 5)
     assert task.cancelled()
 
 
@@ -268,44 +270,122 @@ async def test_each_tick_logs_counts_without_personal_data(
 # --- CLI -----------------------------------------------------------------------------------
 
 
-async def test_run_worker_cli_once_with_fake_provider(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+@pytest.fixture
+async def file_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
+    """The CLI pointed at an empty file-backed SQLite database with the fake provider."""
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'worker.db'}")
-    try:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
-        monkeypatch.setattr(cli, "get_session_factory", lambda: factory)
-        monkeypatch.setattr(cli, "get_engine", lambda: engine)
-        monkeypatch.setattr(cli.settings, "wa_provider", "fake")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    monkeypatch.setattr(cli, "get_session_factory", lambda: factory)
+    monkeypatch.setattr(cli, "get_engine", lambda: engine)
+    monkeypatch.setattr(cli.settings, "wa_provider", "fake")
+    yield
+    await engine.dispose()
 
-        await cli._run(argparse.Namespace(command="run-worker", once=True))
-    finally:
-        await engine.dispose()
+
+async def broken_plan(db: AsyncSession, *, now: datetime) -> PlanReport:
+    raise RuntimeError("boom")
+
+
+async def broken_send_phase(*args: Any, **kwargs: Any) -> int:
+    raise RuntimeError("boom")
+
+
+@pytest.mark.usefixtures("file_database")
+async def test_run_worker_cli_once_with_fake_provider(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    await cli._run(argparse.Namespace(command="run-worker", once=True))  # exit status 0
 
     out = capsys.readouterr().out.strip()
     assert out == "Worker tick done: created=0 expired=0 superseded=0 escalated=0 handled=0"
 
 
-async def test_run_worker_command_reports_a_failed_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.usefixtures("file_database")
+async def test_run_worker_command_is_healthy_with_exit_code_0() -> None:
+    summary, code = await cli.run_worker_command(once=True)
+
+    assert code == 0
+    assert summary.startswith("Worker tick done: created=0")
+
+
+@pytest.mark.usefixtures("file_database")
+async def test_run_worker_command_exits_1_when_planning_failed(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'worker.db'}")
-    try:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
-        monkeypatch.setattr(cli, "get_session_factory", lambda: factory)
-        monkeypatch.setattr(cli.settings, "wa_provider", "fake")
+    monkeypatch.setattr(runner, "plan_messages", broken_plan)
 
-        async def broken(db: AsyncSession, *, now: datetime) -> PlanReport:
-            raise RuntimeError("boom")
+    summary, code = await cli.run_worker_command(once=True)
 
-        monkeypatch.setattr(runner, "plan_messages", broken)
-
-        summary = await cli.run_worker_command(once=True)
-    finally:
-        await engine.dispose()
-
+    assert code == 1
     assert summary == "Worker tick done: planning failed (see the log) handled=0"
+
+
+@pytest.mark.usefixtures("file_database")
+async def test_run_worker_command_exits_1_when_the_send_phase_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner, "run_send_phase", broken_send_phase)
+
+    summary, code = await cli.run_worker_command(once=True)
+
+    assert code == 1
+    assert summary == (
+        "Worker tick done: created=0 expired=0 superseded=0 escalated=0 handled=0"
+        " send phase failed (see the log)"
+    )
+
+
+@pytest.mark.usefixtures("file_database")
+@pytest.mark.parametrize("broken", ["plan", "send"])
+async def test_run_worker_cli_once_exits_non_zero_on_a_failed_tick(
+    broken: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    if broken == "plan":
+        monkeypatch.setattr(runner, "plan_messages", broken_plan)
+    else:
+        monkeypatch.setattr(runner, "run_send_phase", broken_send_phase)
+
+    with pytest.raises(SystemExit) as exit_info:
+        await cli._run(argparse.Namespace(command="run-worker", once=True))
+
+    assert exit_info.value.code == 1
+    assert "Worker tick done:" in capsys.readouterr().out
+
+
+async def test_send_phase_exception_does_not_kill_the_loop(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    calls: list[int] = []
+
+    async def flaky_send_phase(*args: Any, **kwargs: Any) -> int:
+        calls.append(1)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner, "run_send_phase", flaky_send_phase)
+    sleep = RecordingSleep(stop_after=2)
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker(FakeProvider(), sleep)
+
+    assert len(calls) == 2
+    assert sleep.tick_pauses == [TICK, TICK]
+
+
+@pytest.mark.usefixtures("file_database")
+async def test_provider_cache_is_reset_even_if_aclose_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BadClose(FakeProvider):
+        async def aclose(self) -> None:
+            raise RuntimeError("close failed")
+
+    resets: list[int] = []
+    monkeypatch.setattr(cli, "get_provider", lambda: BadClose())
+    monkeypatch.setattr(cli, "reset_provider_cache", lambda: resets.append(1))
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        await cli.run_worker_command(once=True)
+
+    assert resets == [1]

@@ -975,6 +975,75 @@ async def test_failure_outcome_does_not_overwrite_a_cancelled_message(
     )
 
 
+async def cancelled_mid_send(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeProvider, message_id: int, error: Exception | None
+) -> None:
+    """Make staff cancel the message while the provider call is in flight, then raise ``error``
+    (or succeed when it is None)."""
+    original = fake.send
+
+    async def cancel_then(**kwargs: Any) -> Any:
+        await update_row(Message, message_id, status="cancelled", cancel_reason="manual")
+        if error is not None:
+            raise error
+        return await original(**kwargs)
+
+    monkeypatch.setattr(fake, "send", cancel_then)
+
+
+async def test_follow_up_writes_still_happen_when_the_message_was_cancelled_mid_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The failure counter, its reset and the phone flag describe the provider and the phone,
+    not the message row, so they do not depend on the row write."""
+    # Success resets the counter.
+    await configure(consecutive_failures=3)
+    ok = await queued_message()
+    fake = FakeProvider()
+    await cancelled_mid_send(monkeypatch, fake, ok, None)
+    assert await run(fake) == 1
+    assert (await get_message(ok)).status == "cancelled"
+    assert (await get_settings()).consecutive_failures == 0
+
+    # A generic failure counts.
+    generic = await queued_message()
+    fake = FakeProvider()
+    await cancelled_mid_send(monkeypatch, fake, generic, RuntimeError("boom"))
+    assert await run(fake) == 1
+    assert (await get_message(generic)).status == "cancelled"
+    assert (await get_message(generic)).attempts == 0
+    assert (await get_settings()).consecutive_failures == 1
+
+
+async def test_not_on_whatsapp_still_flags_the_phone_when_the_message_was_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message_id = await queued_message()
+    student_id = (await get_message(message_id)).student_id
+    fake = FakeProvider()
+    await cancelled_mid_send(monkeypatch, fake, message_id, NotOnWhatsApp("nope"))
+
+    assert await run(fake) == 1
+
+    message = await get_message(message_id)
+    assert message.status == "cancelled"
+    assert message.error is None
+    assert (await get_student(student_id)).phone_status == "invalid"
+
+
+async def test_provider_unavailable_still_counts_when_the_message_was_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message_id = await queued_message()
+    fake = FakeProvider()
+    await cancelled_mid_send(monkeypatch, fake, message_id, ProviderUnavailable("down"))
+
+    assert await run(fake) == 1
+
+    assert (await get_message(message_id)).status == "cancelled"
+    assert (await get_settings()).consecutive_failures == 1
+
+
 # --- Concurrency ---------------------------------------------------------------------------
 
 
@@ -1035,7 +1104,7 @@ async def test_claim_that_is_always_lost_ends_the_step_as_idle(
     )
 
     assert outcome == "idle"
-    assert len(calls) == 5  # gave up after the bounded number of tries
+    assert len(calls) == sender._CLAIM_TRIES  # gave up after the bounded number of tries
     assert fake.sent == []
 
 

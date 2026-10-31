@@ -35,15 +35,23 @@ class TickReport:
 
     plan: PlanReport | None
     handled: int
+    send_failed: bool = False
+
+    @property
+    def failed(self) -> bool:
+        """True when planning or the send phase raised (details are in the log)."""
+        return self.plan is None or self.send_failed
 
     def summary(self) -> str:
-        if self.plan is None:
-            return f"planning failed (see the log) handled={self.handled}"
         plan = self.plan
-        return (
-            f"created={plan.created} expired={plan.expired} superseded={plan.superseded} "
-            f"escalated={plan.escalated} handled={self.handled}"
-        )
+        if plan is None:
+            text = f"planning failed (see the log) handled={self.handled}"
+        else:
+            text = (
+                f"created={plan.created} expired={plan.expired} superseded={plan.superseded} "
+                f"escalated={plan.escalated} handled={self.handled}"
+            )
+        return f"{text} send phase failed (see the log)" if self.send_failed else text
 
 
 async def run_tick(
@@ -63,14 +71,16 @@ async def run_tick(
         logger.exception("Worker tick: planning failed; the send phase still runs")
 
     handled = 0
+    send_failed = False
     try:
         handled = await run_send_phase(
             session_factory, provider, clock=clock, sleep=sleep, jitter=jitter
         )
     except Exception:
+        send_failed = True
         logger.exception("Worker tick: the send phase failed")
 
-    report = TickReport(plan=plan, handled=handled)
+    report = TickReport(plan=plan, handled=handled, send_failed=send_failed)
     logger.info("Worker tick: %s", report.summary())
     return report
 
