@@ -4,6 +4,8 @@ import math
 import re
 
 _NON_DIGITS = re.compile(r"\D")
+_COUNTRY_CODE = "62"
+_INTERNATIONAL_PREFIX = "00"
 # After the 62 country code: a mobile number starts with 8 and has 9-12 digits in total.
 _NATIONAL_MOBILE = re.compile(r"8\d{8,11}")
 _MASK_VISIBLE_DIGITS = 4
@@ -15,7 +17,9 @@ def normalize_phone(raw: str | int | float | None) -> str | None:
 
     Accepts text with any punctuation, integers and whole floats (spreadsheets often store phone
     numbers as ``6.28123456789e11``). A leading ``0``, ``62`` or ``8`` is recognised as the
-    national prefix, the country code and a bare mobile number respectively.
+    national prefix, the country code and a bare mobile number respectively. Two real-world
+    quirks are tolerated: the international ``00`` prefix (``0062812...``) and a single stray
+    ``0`` after the country code (``62 0812...``).
     """
     if raw is None or isinstance(raw, bool):
         return None
@@ -31,8 +35,12 @@ def normalize_phone(raw: str | int | float | None) -> str | None:
         return None
 
     digits = _NON_DIGITS.sub("", text)
-    if digits.startswith("62"):
-        national = digits[2:]
+    if digits.startswith(_INTERNATIONAL_PREFIX + _COUNTRY_CODE):
+        digits = digits[len(_INTERNATIONAL_PREFIX) :]
+    if digits.startswith(_COUNTRY_CODE):
+        national = digits[len(_COUNTRY_CODE) :]
+        if national.startswith("0"):  # "+62 0812...": the national 0 kept by mistake
+            national = national[1:]
     elif digits.startswith("0"):
         national = digits[1:]
     elif digits.startswith("8"):

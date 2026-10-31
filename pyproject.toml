@@ -21,6 +21,8 @@ dependencies = [
     "pyjwt==2.15.1",
     "argon2-cffi==25.1.0",
     "slowapi==0.1.10",
+    "openpyxl==3.1.5",
+    "python-multipart==0.0.33",
     "tzdata==2026.6",
 ]
 

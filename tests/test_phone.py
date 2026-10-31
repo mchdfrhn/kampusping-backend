@@ -15,6 +15,10 @@ from app.shared.phone import normalize_phone
         ("(0812) 3456.7890", "+6281234567890"),
         ("08123456789", "+628123456789"),
         ("62812345678", "+62812345678"),
+        ("6208123456789", "+628123456789"),  # stray 0 after the country code
+        ("+62 0812-3456-789", "+628123456789"),
+        ("0062812345678", "+62812345678"),  # international 00 prefix
+        ("+0062 812 3456 789", "+628123456789"),
     ],
 )
 def test_normalize_phone_valid(raw: str | int | float, expected: str) -> None:
@@ -39,6 +43,9 @@ def test_normalize_phone_valid(raw: str | int | float, expected: str) -> None:
         True,
         -628123456789,  # negative numbers are never phone numbers
         -6.28123456789e11,
+        "62008123456789",  # only one stray 0 is tolerated
+        "00812345678",  # 00 is only an international prefix when followed by 62
+        "006208123456",  # too short after 62 and the stray 0
         pytest.param(10**5000, id="huge-int"),  # beyond Python's int-to-str digit limit
         pytest.param(-(10**5000), id="huge-negative-int"),
     ],
