@@ -28,6 +28,19 @@ _STATUS_CODES = {
 }
 
 
+# Default texts for errors raised by the framework (Starlette's English phrases are replaced).
+_DEFAULT_MESSAGES = {
+    status.HTTP_400_BAD_REQUEST: "Permintaan tidak valid.",
+    status.HTTP_401_UNAUTHORIZED: "Autentikasi diperlukan. Silakan masuk.",
+    status.HTTP_403_FORBIDDEN: "Anda tidak memiliki izin untuk melakukan tindakan ini.",
+    status.HTTP_404_NOT_FOUND: "Sumber daya tidak ditemukan.",
+    status.HTTP_405_METHOD_NOT_ALLOWED: "Metode tidak diizinkan.",
+    status.HTTP_409_CONFLICT: "Permintaan bertentangan dengan data yang ada.",
+    status.HTTP_429_TOO_MANY_REQUESTS: "Terlalu banyak permintaan. Silakan coba lagi nanti.",
+    status.HTTP_500_INTERNAL_SERVER_ERROR: "Terjadi kesalahan tak terduga.",
+}
+
+
 class AppException(Exception):
     """Domain error rendered as the standard error envelope."""
 
@@ -68,13 +81,32 @@ async def app_exception_handler(_: Request, exc: Exception) -> JSONResponse:
     return error_response(exc.status_code, exc.code, exc.message, exc.details, headers)
 
 
+def _translate_validation_error(error: Mapping[str, Any]) -> str:
+    """Indonesian text for a Pydantic error; our own ``ValueError`` messages pass through."""
+    kind = str(error["type"])
+    context = error.get("ctx") or {}
+    message = str(error["msg"]).removeprefix("Value error, ")
+    if kind == "missing":
+        return "Wajib diisi."
+    if kind == "string_too_short":
+        minimum = context.get("min_length", 1)
+        return "Wajib diisi." if minimum <= 1 else f"Minimal {minimum} karakter."
+    if kind == "string_too_long":
+        return f"Maksimal {context.get('max_length')} karakter."
+    if kind == "value_error":
+        if message.startswith("value is not a valid email address"):
+            return "Format email tidak valid."
+        return message
+    return "Nilai tidak valid."
+
+
 async def validation_exception_handler(_: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, RequestValidationError):
         raise exc
     details = [
         {
             "loc": [str(part) for part in error["loc"]],
-            "message": str(error["msg"]).removeprefix("Value error, "),
+            "message": _translate_validation_error(error),
             "type": error["type"],
         }
         for error in exc.errors()
@@ -82,7 +114,7 @@ async def validation_exception_handler(_: Request, exc: Exception) -> JSONRespon
     return error_response(
         status.HTTP_422_UNPROCESSABLE_CONTENT,
         VALIDATION_ERROR,
-        "Request validation failed.",
+        "Data yang dikirim tidak valid.",
         details,
     )
 
@@ -91,7 +123,8 @@ async def http_exception_handler(_: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, StarletteHTTPException):
         raise exc
     code = _STATUS_CODES.get(exc.status_code, APPLICATION_ERROR)
-    return error_response(exc.status_code, code, str(exc.detail), headers=exc.headers)
+    message = _DEFAULT_MESSAGES.get(exc.status_code, str(exc.detail))
+    return error_response(exc.status_code, code, message, headers=exc.headers)
 
 
 async def rate_limit_handler(_: Request, exc: Exception) -> JSONResponse:
@@ -100,7 +133,7 @@ async def rate_limit_handler(_: Request, exc: Exception) -> JSONResponse:
     return error_response(
         status.HTTP_429_TOO_MANY_REQUESTS,
         TOO_MANY_REQUESTS,
-        "Too many requests. Please try again later.",
+        _DEFAULT_MESSAGES[status.HTTP_429_TOO_MANY_REQUESTS],
         headers={"Retry-After": "60"},
     )
 
@@ -110,7 +143,7 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
     return error_response(
         status.HTTP_500_INTERNAL_SERVER_ERROR,
         INTERNAL_SERVER_ERROR,
-        "An unexpected error occurred.",
+        _DEFAULT_MESSAGES[status.HTTP_500_INTERNAL_SERVER_ERROR],
     )
 
 

@@ -30,7 +30,7 @@ def test_password_hash_roundtrip() -> None:
 
 @pytest.mark.parametrize("weak", ["short1", "alllettersnodigits", "1234567890123"])
 def test_weak_passwords_are_rejected(weak: str) -> None:
-    with pytest.raises(ValueError, match="Password must"):
+    with pytest.raises(ValueError, match="Kata sandi"):
         check_password_strength(weak)
 
 

@@ -56,7 +56,7 @@ class BaseRepository(Generic[ModelT]):
         if column is None:
             allowed = ", ".join(sorted(self.sort_fields))
             raise AppException(
-                f"Unsupported sort field '{sort_name}'. Allowed: {allowed}.",
+                f"Kolom pengurutan '{sort_name}' tidak didukung. Pilihan: {allowed}.",
                 status_code=422,
                 code=VALIDATION_ERROR,
             )

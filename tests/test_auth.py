@@ -64,7 +64,7 @@ async def test_account_locks_after_repeated_failures(client: httpx.AsyncClient) 
     # Even the right password is refused while locked, and the response does not say why.
     locked = await login(client, "admin@example.com")
     assert locked.status_code == 401
-    assert locked.json()["error"]["message"] == "Invalid email or password."
+    assert locked.json()["error"]["message"] == "Email atau kata sandi salah."
 
 
 async def test_successful_login_resets_the_failure_counter(client: httpx.AsyncClient) -> None:
@@ -90,6 +90,8 @@ async def test_me_requires_a_valid_bearer_token(client: httpx.AsyncClient) -> No
 
     assert missing.status_code == garbage.status_code == 401
     assert missing.headers["www-authenticate"] == "Bearer"
+    assert missing.json()["error"]["message"] == "Autentikasi diperlukan. Silakan masuk."
+    assert garbage.json()["error"]["message"] == "Token akses tidak valid atau sudah kedaluwarsa."
     assert valid.status_code == 200
     assert valid.json()["email"] == "admin@example.com"
 
@@ -114,6 +116,7 @@ async def test_refresh_requires_csrf_header_and_cookie(client: httpx.AsyncClient
 
     without_header = await client.post("/api/v1/auth/refresh")
     assert without_header.status_code == 403
+    assert without_header.json()["error"]["message"].startswith("Header wajib tidak ditemukan")
 
     client.cookies.clear()
     without_cookie = await client.post("/api/v1/auth/refresh", headers=CSRF)
@@ -175,6 +178,7 @@ async def test_change_password_signs_out_everywhere(client: httpx.AsyncClient) -
         json={"current_password": "Wrong-password-1", "new_password": "Brand-new-pass-1"},
     )
     assert wrong.status_code == 400
+    assert wrong.json()["error"]["message"] == "Kata sandi saat ini salah."
 
     changed = await client.post(
         "/api/v1/auth/change-password",
@@ -200,6 +204,9 @@ async def test_change_password_enforces_strength(client: httpx.AsyncClient) -> N
     )
 
     assert response.status_code == 422
+    assert response.json()["error"]["details"][0]["message"] == (
+        f"Kata sandi minimal {settings.password_min_length} karakter."
+    )
 
 
 async def test_update_own_profile(client: httpx.AsyncClient) -> None:

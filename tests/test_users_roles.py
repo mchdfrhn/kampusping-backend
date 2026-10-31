@@ -39,6 +39,9 @@ async def test_member_is_forbidden_from_admin_endpoints(
 
     assert users.status_code == roles.status_code == 403
     assert users.json()["error"]["code"] == "forbidden"
+    assert (
+        users.json()["error"]["message"] == "Anda tidak memiliki izin untuk melakukan tindakan ini."
+    )
     assert users.json()["error"]["details"] == {"required": ["users:read"]}
     # ...but being signed in is enough for the self-service endpoints.
     assert (await client.get("/api/v1/auth/me", headers=member_headers)).status_code == 200
@@ -110,6 +113,7 @@ async def test_duplicate_email_is_rejected(
     response = await client.post("/api/v1/users", headers=admin_headers, json=payload)
 
     assert response.status_code == 409
+    assert response.json()["error"]["message"] == "Pengguna dengan email ini sudah ada."
 
 
 async def test_user_creation_validates_password_and_roles(
@@ -128,6 +132,7 @@ async def test_user_creation_validates_password_and_roles(
 
     assert weak.status_code == 422
     assert bad_role.status_code == 422
+    assert bad_role.json()["error"]["message"] == "ID peran tidak dikenal: 9999"
 
 
 async def test_delete_is_soft_and_revokes_sessions(
@@ -162,6 +167,10 @@ async def test_admin_cannot_delete_or_deactivate_self(
     )
 
     assert delete.status_code == deactivate.status_code == 409
+    assert delete.json()["error"]["message"] == "Anda tidak dapat menghapus akun Anda sendiri."
+    assert (
+        deactivate.json()["error"]["message"] == "Anda tidak dapat menonaktifkan akun Anda sendiri."
+    )
 
 
 async def test_list_contract_pagination_and_sorting(
@@ -201,6 +210,9 @@ async def test_permissions_catalog_is_seeded(
     response = await client.get("/api/v1/permissions", headers=admin_headers)
 
     assert [item["code"] for item in response.json()] == sorted(ALL_PERMISSION_CODES)
+    descriptions = {item["code"]: item["description"] for item in response.json()}
+    assert descriptions["users:read"] == "Melihat pengguna"
+    assert descriptions["roles:delete"] == "Menghapus peran"
 
 
 async def test_role_crud_with_permissions(
@@ -240,7 +252,9 @@ async def test_role_rejects_unknown_permissions_and_duplicate_names(
     duplicate = await client.post("/api/v1/roles", headers=admin_headers, json={"name": "MEMBER"})
 
     assert unknown.status_code == 422
+    assert unknown.json()["error"]["message"] == "Kode izin tidak dikenal: nope:nope"
     assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["message"] == "Peran dengan nama ini sudah ada."
 
 
 async def test_system_roles_are_protected(
@@ -261,6 +275,8 @@ async def test_system_roles_are_protected(
         json={"name": ADMIN_ROLE, "permissions": []},
     )
     assert rename.status_code == reduce_admin.status_code == 409
+    assert rename.json()["error"]["message"] == "Peran sistem tidak dapat diganti namanya."
+    assert reduce_admin.json()["error"]["message"] == "Peran admin selalu memiliki seluruh izin."
 
     # Non-name edits to a non-admin system role are allowed.
     tweak = await client.put(
@@ -290,3 +306,6 @@ async def test_role_in_use_cannot_be_deleted(
     response = await client.delete(f"/api/v1/roles/{custom.json()['id']}", headers=admin_headers)
 
     assert response.status_code == 409
+    assert response.json()["error"]["message"] == (
+        "Peran masih digunakan oleh 1 pengguna. Pindahkan penggunanya terlebih dahulu."
+    )

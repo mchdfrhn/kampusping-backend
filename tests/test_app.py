@@ -1,7 +1,14 @@
+import json
+from types import SimpleNamespace
+from typing import Any, cast
+
 import httpx
 import pytest
+from fastapi import Request
+from slowapi.errors import RateLimitExceeded
 
 from app.core.config import Settings
+from app.core.exceptions import rate_limit_handler, unhandled_exception_handler
 from app.main import create_app
 
 
@@ -32,10 +39,53 @@ async def test_errors_use_one_envelope(client: httpx.AsyncClient) -> None:
 
     assert not_found.status_code == 404
     assert not_found.json()["error"]["code"] == "not_found"
+    assert not_found.json()["error"]["message"] == "Sumber daya tidak ditemukan."
     assert invalid.status_code == 422
     body = invalid.json()["error"]
     assert body["code"] == "validation_error"
+    assert body["message"] == "Data yang dikirim tidak valid."
     assert {"email", "password"} <= {item["loc"][-1] for item in body["details"]}
+
+
+async def test_validation_details_are_indonesian(
+    client: httpx.AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    bad_email = await client.post(
+        "/api/v1/auth/login", json={"email": "not-an-email", "password": ""}
+    )
+    short = await client.post(
+        "/api/v1/roles", headers=admin_headers, json={"name": "x", "permissions": "nope"}
+    )
+
+    by_field = {i["loc"][-1]: i["message"] for i in bad_email.json()["error"]["details"]}
+    assert by_field == {"email": "Format email tidak valid.", "password": "Wajib diisi."}
+    by_field = {i["loc"][-1]: i["message"] for i in short.json()["error"]["details"]}
+    assert by_field["name"] == "Minimal 2 karakter."
+    assert by_field["permissions"] == "Nilai tidak valid."
+
+
+async def test_method_not_allowed_message_is_indonesian(client: httpx.AsyncClient) -> None:
+    response = await client.delete("/health")
+
+    assert response.status_code == 405
+    assert response.json()["error"]["message"] == "Metode tidak diizinkan."
+
+
+async def test_rate_limit_and_unexpected_errors_use_indonesian_messages() -> None:
+    request = cast(Request, None)  # the handlers do not read the request
+    limit = SimpleNamespace(error_message=None, limit="5 per 1 minute")
+
+    limited = await rate_limit_handler(request, RateLimitExceeded(cast(Any, limit)))
+    crashed = await unhandled_exception_handler(request, RuntimeError("boom"))
+
+    assert limited.status_code == 429
+    assert json.loads(bytes(limited.body))["error"] == {
+        "code": "too_many_requests",
+        "message": "Terlalu banyak permintaan. Silakan coba lagi nanti.",
+        "details": None,
+    }
+    assert crashed.status_code == 500
+    assert json.loads(bytes(crashed.body))["error"]["message"] == "Terjadi kesalahan tak terduga."
 
 
 async def test_openapi_lists_the_feature_routes(client: httpx.AsyncClient) -> None:

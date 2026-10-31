@@ -21,10 +21,14 @@ async def get_current_user(
     db: DbSession,
 ) -> User:
     if credentials is None:
-        raise AppException("Authentication required.", status_code=401, code=UNAUTHORIZED)
+        raise AppException(
+            "Autentikasi diperlukan. Silakan masuk.", status_code=401, code=UNAUTHORIZED
+        )
     user = await UserRepository(db).get(decode_access_token(credentials.credentials))
     if user is None or not user.is_active:
-        raise AppException("Authentication required.", status_code=401, code=UNAUTHORIZED)
+        raise AppException(
+            "Autentikasi diperlukan. Silakan masuk.", status_code=401, code=UNAUTHORIZED
+        )
     return user
 
 
@@ -41,7 +45,7 @@ def require_permissions(*codes: str):
         missing = set(codes) - user.permission_codes
         if missing:
             raise AppException(
-                "You do not have permission to perform this action.",
+                "Anda tidak memiliki izin untuk melakukan tindakan ini.",
                 status_code=403,
                 code=FORBIDDEN,
                 details={"required": sorted(missing)},
@@ -55,5 +59,5 @@ def require_csrf_header(request: Request) -> None:
     """Cookie-authenticated endpoints must carry the custom header (see ``CSRF_HEADER``)."""
     if not request.headers.get(CSRF_HEADER):
         raise AppException(
-            f"Missing required header: {CSRF_HEADER}.", status_code=403, code=FORBIDDEN
+            f"Header wajib tidak ditemukan: {CSRF_HEADER}.", status_code=403, code=FORBIDDEN
         )

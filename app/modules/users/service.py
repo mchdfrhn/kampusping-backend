@@ -29,14 +29,14 @@ class UserService:
     async def get(self, user_id: int) -> User:
         user = await self.users.get(user_id)
         if user is None:
-            raise AppException("User not found.", status_code=404, code=NOT_FOUND)
+            raise AppException("Pengguna tidak ditemukan.", status_code=404, code=NOT_FOUND)
         return user
 
     async def create(self, data: UserCreate, actor: User) -> User:
         email = data.email.lower()
         if await self.users.get_by_email(email, include_deleted=True):
             raise AppException(
-                "A user with this email already exists.", status_code=409, code=CONFLICT
+                "Pengguna dengan email ini sudah ada.", status_code=409, code=CONFLICT
             )
 
         user = User(
@@ -57,7 +57,7 @@ class UserService:
         user = await self.get(user_id)
         if user.id == actor.id and not data.is_active:
             raise AppException(
-                "You cannot deactivate your own account.", status_code=409, code=CONFLICT
+                "Anda tidak dapat menonaktifkan akun Anda sendiri.", status_code=409, code=CONFLICT
             )
 
         user.full_name = data.full_name
@@ -83,7 +83,7 @@ class UserService:
         user = await self.get(user_id)
         if user.id == actor.id:
             raise AppException(
-                "You cannot delete your own account.", status_code=409, code=CONFLICT
+                "Anda tidak dapat menghapus akun Anda sendiri.", status_code=409, code=CONFLICT
             )
         await self.users.soft_delete(user, actor.email)
         await self.tokens.revoke_all_for_user(user.id)
@@ -95,7 +95,7 @@ class UserService:
         unknown = unique_ids - {role.id for role in found}
         if unknown:
             raise AppException(
-                "Unknown role id(s): " + ", ".join(str(i) for i in sorted(unknown)),
+                "ID peran tidak dikenal: " + ", ".join(str(i) for i in sorted(unknown)),
                 status_code=422,
                 code=VALIDATION_ERROR,
             )

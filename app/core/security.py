@@ -32,11 +32,11 @@ DUMMY_PASSWORD_HASH = _hasher.hash("not-a-real-password")
 
 def check_password_strength(value: str) -> str:
     if len(value) < settings.password_min_length:
-        raise ValueError(f"Password must be at least {settings.password_min_length} characters.")
+        raise ValueError(f"Kata sandi minimal {settings.password_min_length} karakter.")
     if len(value) > MAX_PASSWORD_LENGTH:
-        raise ValueError(f"Password must be at most {MAX_PASSWORD_LENGTH} characters.")
+        raise ValueError(f"Kata sandi maksimal {MAX_PASSWORD_LENGTH} karakter.")
     if not re.search(r"[A-Za-z]", value) or not re.search(r"\d", value):
-        raise ValueError("Password must contain at least one letter and one digit.")
+        raise ValueError("Kata sandi harus mengandung minimal satu huruf dan satu angka.")
     return value
 
 
@@ -99,7 +99,7 @@ def decode_access_token(token: str) -> int:
         return int(payload["sub"])
     except (jwt.InvalidTokenError, ValueError) as exc:
         raise AppException(
-            "Invalid or expired access token.", status_code=401, code=UNAUTHORIZED
+            "Token akses tidak valid atau sudah kedaluwarsa.", status_code=401, code=UNAUTHORIZED
         ) from exc
 
 

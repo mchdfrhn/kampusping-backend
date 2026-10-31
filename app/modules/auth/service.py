@@ -35,13 +35,11 @@ class IssuedSession:
 def _invalid_credentials() -> AppException:
     # One message for unknown email, wrong password, inactive and locked accounts alike,
     # so the response cannot be used to enumerate accounts.
-    return AppException("Invalid email or password.", status_code=401, code=UNAUTHORIZED)
+    return AppException("Email atau kata sandi salah.", status_code=401, code=UNAUTHORIZED)
 
 
 def _invalid_session() -> AppException:
-    return AppException(
-        "Session expired. Please sign in again.", status_code=401, code=UNAUTHORIZED
-    )
+    return AppException("Sesi berakhir. Silakan masuk kembali.", status_code=401, code=UNAUTHORIZED)
 
 
 class AuthService:
@@ -126,7 +124,7 @@ class AuthService:
     async def change_password(self, user: User, current_password: str, new_password: str) -> None:
         if not await verify_password_async(current_password, user.password_hash):
             raise AppException(
-                "Current password is incorrect.", status_code=400, code="invalid_password"
+                "Kata sandi saat ini salah.", status_code=400, code="invalid_password"
             )
         user.password_hash = await hash_password_async(new_password)
         user.password_changed_at = utc_now()

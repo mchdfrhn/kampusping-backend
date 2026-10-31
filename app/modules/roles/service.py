@@ -30,7 +30,7 @@ class RoleService:
     async def get(self, role_id: int) -> Role:
         role = await self.roles.get(role_id)
         if role is None:
-            raise AppException("Role not found.", status_code=404, code=NOT_FOUND)
+            raise AppException("Peran tidak ditemukan.", status_code=404, code=NOT_FOUND)
         return role
 
     async def create(self, data: RoleCreate, actor: User) -> Role:
@@ -52,11 +52,11 @@ class RoleService:
         if role.is_system:
             if data.name != role.name:
                 raise AppException(
-                    "System roles cannot be renamed.", status_code=409, code=CONFLICT
+                    "Peran sistem tidak dapat diganti namanya.", status_code=409, code=CONFLICT
                 )
             if role.name == ADMIN_ROLE:
                 raise AppException(
-                    "The admin role always holds every permission.", status_code=409, code=CONFLICT
+                    "Peran admin selalu memiliki seluruh izin.", status_code=409, code=CONFLICT
                 )
         elif data.name != role.name:
             await self._ensure_name_available(data.name, exclude_id=role.id)
@@ -72,7 +72,7 @@ class RoleService:
     async def delete(self, role_id: int, actor: User) -> None:
         role = await self.get(role_id)
         if role.is_system:
-            raise AppException("System roles cannot be deleted.", status_code=409, code=CONFLICT)
+            raise AppException("Peran sistem tidak dapat dihapus.", status_code=409, code=CONFLICT)
         in_use = await self.db.scalar(
             select(func.count())
             .select_from(user_roles)
@@ -81,7 +81,8 @@ class RoleService:
         )
         if in_use:
             raise AppException(
-                f"Role is assigned to {in_use} user(s). Reassign them first.",
+                f"Peran masih digunakan oleh {in_use} pengguna. "
+                "Pindahkan penggunanya terlebih dahulu.",
                 status_code=409,
                 code=CONFLICT,
             )
@@ -90,9 +91,7 @@ class RoleService:
 
     async def _ensure_name_available(self, name: str, *, exclude_id: int | None = None) -> None:
         if await self.roles.get_by_name(name, exclude_id=exclude_id):
-            raise AppException(
-                "A role with this name already exists.", status_code=409, code=CONFLICT
-            )
+            raise AppException("Peran dengan nama ini sudah ada.", status_code=409, code=CONFLICT)
 
     async def _resolve_permissions(self, codes: Sequence[str]) -> Sequence[Permission]:
         unique_codes = set(codes)
@@ -100,7 +99,7 @@ class RoleService:
         unknown = unique_codes - {permission.code for permission in found}
         if unknown:
             raise AppException(
-                "Unknown permission code(s): " + ", ".join(sorted(unknown)),
+                "Kode izin tidak dikenal: " + ", ".join(sorted(unknown)),
                 status_code=422,
                 code=VALIDATION_ERROR,
             )
