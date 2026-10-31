@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "webapp-backend"
+name = "kampusping-backend"
 version = "1.0.0"
 description = "Production-ready FastAPI starter with JWT auth, RBAC, and a layered module structure"
 readme = "README.md"

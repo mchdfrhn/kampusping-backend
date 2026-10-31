@@ -17,7 +17,7 @@
   Rows are soft-deleted; `BaseRepository.select()` filters them out.
 - Constraint and index names follow the naming convention in `app/db/base.py`, so Alembic
   autogenerate and manual migrations produce stable names.
-- Unique columns (`users.email`, `roles.name`, `example_items.code`) also cover soft-deleted
+- Unique columns (`users.email`, `roles.name`) also cover soft-deleted
   rows, so a deleted email or code cannot be reused. Services check this and return `409`.
 
 ## Migrations

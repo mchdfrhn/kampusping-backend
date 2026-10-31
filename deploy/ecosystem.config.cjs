@@ -2,7 +2,7 @@
 module.exports = {
   apps: [
     {
-      name: 'webapp-backend-dev',
+      name: 'kampusping-backend-dev',
       cwd: __dirname + '/..',
       script: '.venv/bin/uvicorn',
       args: 'app.main:app --host 127.0.0.1 --port 8090 --reload',

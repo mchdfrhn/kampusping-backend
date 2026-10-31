@@ -2,7 +2,7 @@
 # Browser -> HTTPS load balancer / TLS terminator -> Nginx :80 -> PM2 uvicorn 127.0.0.1:8093
 # Replace server_name with your API domain before installing.
 
-upstream webapp_backend_prod {
+upstream kampusping_backend_prod {
     server 127.0.0.1:8093;
     keepalive 32;
 }
@@ -21,6 +21,6 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_pass http://webapp_backend_prod;
+        proxy_pass http://kampusping_backend_prod;
     }
 }

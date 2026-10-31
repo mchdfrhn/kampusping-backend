@@ -21,8 +21,6 @@ Headers = dict[str, str]
         ("POST", "/api/v1/users"),
         ("GET", "/api/v1/roles"),
         ("GET", "/api/v1/permissions"),
-        ("GET", "/api/v1/examples"),
-        ("POST", "/api/v1/examples"),
     ],
 )
 async def test_endpoints_require_authentication(
@@ -38,15 +36,12 @@ async def test_member_is_forbidden_from_admin_endpoints(
 ) -> None:
     users = await client.get("/api/v1/users", headers=member_headers)
     roles = await client.get("/api/v1/roles", headers=member_headers)
-    write = await client.post(
-        "/api/v1/examples", headers=member_headers, json={"code": "A1", "name": "x"}
-    )
 
-    assert users.status_code == roles.status_code == write.status_code == 403
+    assert users.status_code == roles.status_code == 403
     assert users.json()["error"]["code"] == "forbidden"
     assert users.json()["error"]["details"] == {"required": ["users:read"]}
-    # ...but the permission they do hold works.
-    assert (await client.get("/api/v1/examples", headers=member_headers)).status_code == 200
+    # ...but being signed in is enough for the self-service endpoints.
+    assert (await client.get("/api/v1/auth/me", headers=member_headers)).status_code == 200
 
 
 async def test_deactivated_user_loses_access_immediately(
@@ -54,7 +49,7 @@ async def test_deactivated_user_loses_access_immediately(
 ) -> None:
     member = await create_user("member@example.com", MEMBER_ROLE)
     member_headers = await auth_headers(client, "member@example.com")
-    assert (await client.get("/api/v1/examples", headers=member_headers)).status_code == 200
+    assert (await client.get("/api/v1/auth/me", headers=member_headers)).status_code == 200
 
     await client.put(
         f"/api/v1/users/{member.id}",
@@ -62,7 +57,7 @@ async def test_deactivated_user_loses_access_immediately(
         json={"full_name": "Member", "is_active": False, "role_ids": []},
     )
 
-    assert (await client.get("/api/v1/examples", headers=member_headers)).status_code == 401
+    assert (await client.get("/api/v1/auth/me", headers=member_headers)).status_code == 401
     assert (await login(client, "member@example.com")).status_code == 401
 
 
@@ -214,19 +209,19 @@ async def test_role_crud_with_permissions(
     created = await client.post(
         "/api/v1/roles",
         headers=admin_headers,
-        json={"name": "Reviewer", "description": "Read only", "permissions": ["examples:read"]},
+        json={"name": "Reviewer", "description": "Read only", "permissions": ["roles:read"]},
     )
     assert created.status_code == 201
     role = created.json()
-    assert role["permissions"] == ["examples:read"]
+    assert role["permissions"] == ["roles:read"]
     assert role["is_system"] is False
 
     updated = await client.put(
         f"/api/v1/roles/{role['id']}",
         headers=admin_headers,
-        json={"name": "Reviewer", "permissions": ["examples:read", "examples:update"]},
+        json={"name": "Reviewer", "permissions": ["roles:read", "roles:update"]},
     )
-    assert updated.json()["permissions"] == ["examples:read", "examples:update"]
+    assert updated.json()["permissions"] == ["roles:read", "roles:update"]
 
     assert (
         await client.delete(f"/api/v1/roles/{role['id']}", headers=admin_headers)
@@ -271,7 +266,7 @@ async def test_system_roles_are_protected(
     tweak = await client.put(
         f"/api/v1/roles/{member_role}",
         headers=admin_headers,
-        json={"name": MEMBER_ROLE, "permissions": ["examples:read", "examples:create"]},
+        json={"name": MEMBER_ROLE, "permissions": ["roles:read", "roles:create"]},
     )
     assert tweak.status_code == 200
 

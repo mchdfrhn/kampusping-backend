@@ -10,7 +10,7 @@
 module.exports = {
   apps: [
     {
-      name: 'webapp-backend',
+      name: 'kampusping-backend',
       cwd: __dirname + '/..',
       script: '.venv/bin/uvicorn',
       args: 'app.main:app --host 127.0.0.1 --port 8093 --workers 2 --proxy-headers --forwarded-allow-ips 127.0.0.1',

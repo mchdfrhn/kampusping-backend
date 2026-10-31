@@ -41,7 +41,7 @@ async def test_errors_use_one_envelope(client: httpx.AsyncClient) -> None:
 async def test_openapi_lists_the_feature_routes(client: httpx.AsyncClient) -> None:
     paths = (await client.get("/openapi.json")).json()["paths"]
 
-    for path in ("/api/v1/auth/login", "/api/v1/users", "/api/v1/roles", "/api/v1/examples"):
+    for path in ("/api/v1/auth/login", "/api/v1/users", "/api/v1/roles"):
         assert path in paths
     assert "/health" not in paths
 

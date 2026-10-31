@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SITE_NAME="webapp-backend"
+SITE_NAME="kampusping-backend"
 SOURCE="${SCRIPT_DIR}/nginx-prod.conf.example"
 TARGET="/etc/nginx/sites-available/${SITE_NAME}"
 

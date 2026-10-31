@@ -27,7 +27,7 @@ _ALLOWED_URL_SCHEMES: dict[DatabaseEngine, tuple[str, ...]] = {
 
 class Settings(BaseSettings):
     # --- Application ---
-    app_name: str = "Webapp API"
+    app_name: str = "KampusPing API"
     app_env: str = "development"
     app_debug: bool = False
     app_version: str = "1.0.0"
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # --- Database ---
     database_engine: DatabaseEngine = DatabaseEngine.POSTGRESQL
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/webapp"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/kampusping"
     database_echo: bool = False
 
     # --- Auth ---

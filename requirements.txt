@@ -1,4 +1,4 @@
-# Webapp Backend — runtime dependencies
+# KampusPing Backend — runtime dependencies
 # Python >= 3.11
 #
 #   python -m venv .venv

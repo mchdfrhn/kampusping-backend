@@ -1,4 +1,4 @@
-# Webapp Backend
+# KampusPing Backend
 
 A production-ready FastAPI starter: JWT authentication with rotating refresh tokens, role-based
 access control, a layered module structure, async SQLAlchemy 2, Alembic migrations, and a test
@@ -48,8 +48,7 @@ app/
 ├── modules/
 │   ├── auth/            # login, refresh, logout, me, change-password
 │   ├── users/           # user management
-│   ├── roles/           # roles and the permission catalog
-│   └── example/         # complete CRUD module to copy from
+│   └── roles/           # roles and the permission catalog
 └── shared/              # pagination contract, BaseRepository (soft delete), utils
 alembic/                 # migrations
 deploy/                  # PM2 + Nginx
@@ -63,7 +62,7 @@ router.py  ->  schema.py  ->  service.py  ->  repository.py  ->  model.py
 (HTTP)         (validation)   (rules, commit)  (queries)         (tables)
 ```
 
-Start a new module by copying `app/modules/example/` ([guide](docs/adding-a-module.md)).
+Start a new module by copying `app/modules/roles/` ([guide](docs/adding-a-module.md)).
 
 ## Conventions
 
@@ -89,7 +88,7 @@ for the token flow and security properties.
   cookie scoped to `/api/v1/auth`. Replaying a rotated token revokes the whole chain.
 - Argon2id password hashing, password policy, per-account lockout and a per-IP login rate limit.
 - **Permissions** are `resource:action` codes defined in `app/core/permissions.py`; **roles** are
-  data that admins compose from them. System roles: `admin` (everything), `member` (read-only).
+  data that admins compose from them. System roles: `admin` (everything), `member` (no permissions until an admin grants some).
 
 Add a permission: define it in `core/permissions.py`, run `python -m app.cli seed`, then guard a
 route with `Depends(require_permissions(MY_PERMISSION))`.

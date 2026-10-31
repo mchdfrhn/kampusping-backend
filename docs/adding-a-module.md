@@ -1,6 +1,6 @@
 # Adding a module
 
-Copy `app/modules/example/` and rename. Example: a `products` module.
+Copy `app/modules/roles/` (or `users/`) and rename. Example: a `products` module.
 
 1. **Model** (`model.py`): subclass `AuditedModel` for `id`, audit columns and soft delete.
    Set `__tablename__`, add your columns, and import the model in `app/db/models/__init__.py`.
@@ -19,7 +19,7 @@ Copy `app/modules/example/` and rename. Example: a `products` module.
 8. **Router** (`router.py`): keep it thin. Guard each route with `require_permissions(...)`,
    accept `ListQuery` for list endpoints and return `Page[...]`.
 9. **Register** the router in `app/api/v1/router.py`.
-10. **Tests**: copy `tests/test_example.py`; cover 401/403, validation, uniqueness, filters and
+10. **Tests**: model them on `tests/test_users_roles.py`; cover 401/403, validation, uniqueness, filters and
     soft delete.
 
-The frontend counterpart is `src/modules/example/` in the web app.
+The frontend counterpart lives in `src/modules/` in the web app (see `src/modules/README.md`).
