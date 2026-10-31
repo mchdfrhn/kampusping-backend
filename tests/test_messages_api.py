@@ -88,7 +88,9 @@ async def test_list_filters_by_invoice_and_defaults_to_newest_queued_first(
     first = await add_message()  # queued_at = NOW - 1h * n, so later rows are older
     second = await add_message()
     async with get_session_factory()() as db:
-        invoice_id = (await db.get(Message, first)).invoice_id  # type: ignore[union-attr]
+        row = await db.get(Message, first)
+        assert row is not None
+        invoice_id = row.invoice_id
 
     body = (await client.get(MESSAGES_URL, headers=staf_headers)).json()
     assert [item["id"] for item in body["items"]] == [first, second]  # queued_at descending

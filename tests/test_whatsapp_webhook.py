@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
@@ -13,11 +14,13 @@ from app.core.config import settings
 from app.db.session import get_session_factory
 from app.modules.messages.model import Message
 from app.modules.whatsapp import router as whatsapp_router
+from app.modules.whatsapp.constants import MAX_WEBHOOK_BODY_BYTES
 from app.modules.whatsapp.signature import sign_body
 
 from .messages_helpers import (
     NOW,
     SECRET,
+    WEBHOOK_URL,
     Clock,
     add_message,
     get_message,
@@ -316,4 +319,109 @@ async def test_webhook_body_too_large_is_413(
     assert response.json()["error"]["message"] == "Isi permintaan terlalu besar."
 
     unsigned = await send_raw(client, too_big, signature=None)  # size is checked before the HMAC
+    assert unsigned.status_code == 413
+
+
+async def test_webhook_receipts_never_touch_failed_cancelled_or_queued_rows(
+    client: httpx.AsyncClient, webhook_secret: str
+) -> None:
+    """Only a ``sent`` (or, for ``read``, ``delivered``) row may take a delivered/read receipt."""
+    ids = {
+        "failed": await add_message(status="failed", provider_message_id="w-f", error="lama"),
+        "cancelled": await add_message(status="cancelled", provider_message_id="w-c"),
+        "queued": await add_message(status="queued", provider_message_id="w-q"),
+    }
+    provider_ids = {"failed": "w-f", "cancelled": "w-c", "queued": "w-q"}
+
+    for name, provider_id in provider_ids.items():
+        for state in ("delivered", "read"):
+            event = {"type": "status", "provider_message_id": provider_id, "state": state}
+            assert (await post_event(client, event)).status_code == 202, (name, state)
+
+    for name, message_id in ids.items():
+        stored = await get_message(message_id)
+        assert stored.status == name
+        assert stored.delivered_at is None
+        assert stored.read_at is None
+    assert (await get_message(ids["failed"])).error == "lama"
+
+
+async def test_webhook_receipt_for_a_sending_row_is_a_dropped_no_op(
+    client: httpx.AsyncClient, webhook_secret: str
+) -> None:
+    # Documented dropped-receipt behaviour: a ``sending`` row has no provider_message_id yet (the
+    # sender stores it together with the ``sent`` status), so a receipt that races ahead of that
+    # write is an unknown id and is acknowledged as a no-op. The gateway must delay and retry
+    # receipts for ids the backend does not know yet (see the ADR 0002 notes).
+    message_id = await add_message(status="sending")
+    assert (await get_message(message_id)).provider_message_id is None
+
+    for state in ("delivered", "read", "failed"):
+        event = {"type": "status", "provider_message_id": "wamid-racing", "state": state}
+        response = await post_event(client, event)
+        assert response.status_code == 202
+        assert response.json() == {"status": "accepted"}
+
+    stored = await get_message(message_id)
+    assert (stored.status, stored.provider_message_id) == ("sending", None)
+    assert (stored.delivered_at, stored.read_at, stored.error) == (None, None, None)
+
+
+# --- Webhook: streamed bodies (no Content-Length) ------------------------------------------
+
+
+async def chunked(body: bytes, size: int = 4096) -> AsyncIterator[bytes]:
+    for start in range(0, len(body), size):
+        yield body[start : start + size]
+
+
+async def post_chunked(client: httpx.AsyncClient, body: bytes, *, signature: str | None):
+    headers = {"Content-Type": "application/json"}
+    if signature is not None:
+        headers["X-Signature"] = signature
+    request = client.build_request("POST", WEBHOOK_URL, content=chunked(body), headers=headers)
+    assert "content-length" not in request.headers  # the limit must be enforced while streaming
+    assert request.headers["transfer-encoding"] == "chunked"
+    return await client.send(request)
+
+
+def padded_connection_event(size: int) -> bytes:
+    skeleton = json.dumps({"type": "connection", "pad": ""}).encode()
+    return json.dumps({"type": "connection", "pad": "a" * (size - len(skeleton))}).encode()
+
+
+async def test_webhook_chunked_body_at_the_limit_is_accepted(
+    client: httpx.AsyncClient, webhook_secret: str
+) -> None:
+    body = padded_connection_event(MAX_WEBHOOK_BODY_BYTES)
+    assert len(body) == MAX_WEBHOOK_BODY_BYTES
+
+    response = await post_chunked(client, body, signature=sign_body(SECRET, body))
+
+    assert response.status_code == 202
+
+
+async def test_webhook_chunked_status_event_is_applied(
+    client: httpx.AsyncClient, webhook_secret: str
+) -> None:
+    message_id = await sent_message()
+    body = json.dumps(STATUS_EVENT).encode()
+
+    response = await post_chunked(client, body, signature=sign_body(SECRET, body))
+
+    assert response.status_code == 202
+    assert (await get_message(message_id)).status == "delivered"
+
+
+async def test_webhook_chunked_body_over_the_limit_is_413(
+    client: httpx.AsyncClient, webhook_secret: str
+) -> None:
+    body = padded_connection_event(MAX_WEBHOOK_BODY_BYTES + 1)
+    assert len(body) == MAX_WEBHOOK_BODY_BYTES + 1
+
+    signed = await post_chunked(client, body, signature=sign_body(SECRET, body))
+    unsigned = await post_chunked(client, body, signature=None)  # size comes before the HMAC
+
+    assert signed.status_code == 413
+    assert signed.json()["error"]["message"] == "Isi permintaan terlalu besar."
     assert unsigned.status_code == 413

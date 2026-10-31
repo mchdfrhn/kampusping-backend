@@ -1,11 +1,14 @@
+import logging
+
 import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.core.config import settings
 from app.db.session import get_session_factory
 from app.modules.settings.model import AppSettings
 from app.modules.settings.service import SettingsService
-from app.modules.whatsapp.deps import get_provider
+from app.modules.whatsapp.deps import get_provider, reset_provider_cache
 from app.modules.whatsapp.fake import FakeProvider
 from app.modules.whatsapp.provider import ProviderStatus, ProviderUnavailable
 
@@ -116,3 +119,75 @@ async def test_logout_provider_error_is_502_without_audit(
     assert error["message"] == "Gagal memutuskan sesi WhatsApp."
     assert "127.0.0.1" not in response.text
     assert await audit_events("whatsapp.logout") == []
+
+
+# --- Provider that cannot be built ---------------------------------------------------------
+
+
+@pytest.fixture
+def misconfigured_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WA_PROVIDER=gateway without an API key: ``get_provider()`` itself raises."""
+    monkeypatch.setattr(settings, "wa_provider", "gateway")
+    monkeypatch.setattr(settings, "wa_gateway_api_key", None)
+    reset_provider_cache()
+
+
+async def test_status_is_disconnected_not_500_when_the_provider_cannot_be_built(
+    client: httpx.AsyncClient,
+    staf_headers: dict[str, str],
+    misconfigured_gateway: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="app.modules.whatsapp.deps"):
+        response = await client.get(STATUS_URL, headers=staf_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"state": "disconnected", "qr": None, "paused_reason": None}
+    warnings = [r for r in caplog.records if r.name == "app.modules.whatsapp.deps"]
+    assert len(warnings) == 1
+    assert "RuntimeError" in warnings[0].getMessage()  # the failure type, never a secret or URL
+    assert "WA_GATEWAY_API_KEY" not in warnings[0].getMessage()
+
+
+async def test_status_still_persists_the_default_settings_when_the_provider_cannot_be_built(
+    client: httpx.AsyncClient, staf_headers: dict[str, str], misconfigured_gateway: None
+) -> None:
+    await client.get(STATUS_URL, headers=staf_headers)
+
+    async with get_session_factory()() as db:
+        assert await db.get(AppSettings, 1) is not None
+
+
+async def test_logout_is_502_without_audit_when_the_provider_cannot_be_built(
+    client: httpx.AsyncClient, admin_headers: dict[str, str], misconfigured_gateway: None
+) -> None:
+    response = await client.post(LOGOUT_URL, headers=admin_headers)
+
+    assert response.status_code == 502
+    error = response.json()["error"]
+    assert error["code"] == "application_error"
+    assert error["message"] == "Gagal memutuskan sesi WhatsApp."
+    assert "WA_GATEWAY" not in response.text
+    assert await audit_events("whatsapp.logout") == []
+
+
+async def test_status_without_override_uses_the_configured_fake_provider(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    response = await client.get(STATUS_URL, headers=staf_headers)
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "connected"
+
+
+async def test_overrides_of_get_provider_still_take_effect_through_current_provider(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    staf_headers: dict[str, str],
+    misconfigured_gateway: None,
+) -> None:
+    app.dependency_overrides[get_provider] = lambda: FakeProvider(state="connected")
+
+    response = await client.get(STATUS_URL, headers=staf_headers)
+
+    assert response.json()["state"] == "connected"

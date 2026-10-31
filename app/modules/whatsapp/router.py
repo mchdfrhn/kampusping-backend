@@ -26,7 +26,7 @@ from .constants import (
     MSG_LOGOUT_FAILED,
     SIGNATURE_HEADER,
 )
-from .deps import get_provider
+from .deps import current_provider
 from .provider import ProviderError, ProviderState, WhatsAppProvider
 from .schema import LogoutRead, WebhookAccepted, WebhookStatusEvent, WhatsAppStatusRead
 from .signature import verify_signature
@@ -38,7 +38,7 @@ webhook_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 CanRead = Annotated[User, Depends(require_permissions(SETTINGS_READ))]
 CanUpdate = Annotated[User, Depends(require_permissions(SETTINGS_UPDATE))]
-Provider = Annotated[WhatsAppProvider, Depends(get_provider)]
+Provider = Annotated[WhatsAppProvider | None, Depends(current_provider)]
 
 _warned_missing_secret = False
 
@@ -47,11 +47,12 @@ _warned_missing_secret = False
 async def whatsapp_status(db: DbSession, _: CanRead, provider: Provider) -> WhatsAppStatusRead:
     state: ProviderState = "disconnected"
     qr: str | None = None
-    try:
-        current = await provider.status()
-        state, qr = current.state, current.qr
-    except Exception as exc:
-        logger.warning("WhatsApp status check failed: %s", type(exc).__name__)
+    if provider is not None:  # None: the provider cannot be built, reported as disconnected
+        try:
+            current = await provider.status()
+            state, qr = current.state, current.qr
+        except Exception as exc:
+            logger.warning("WhatsApp status check failed: %s", type(exc).__name__)
 
     row = await SettingsService(db).get()
     await db.commit()  # persists the default settings row when it was just created
@@ -60,6 +61,8 @@ async def whatsapp_status(db: DbSession, _: CanRead, provider: Provider) -> What
 
 @router.post("/logout", response_model=LogoutRead, summary="Disconnect the WhatsApp session")
 async def whatsapp_logout(db: DbSession, actor: CanUpdate, provider: Provider) -> LogoutRead:
+    if provider is None:
+        raise AppException(MSG_LOGOUT_FAILED, status_code=502, code=APPLICATION_ERROR)
     try:
         await provider.logout()
     except ProviderError as exc:
