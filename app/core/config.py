@@ -1,6 +1,7 @@
 import json
 from enum import StrEnum
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -64,6 +65,18 @@ class Settings(BaseSettings):
     rate_limit_storage_uri: str = "memory://"
     login_rate_limit: str = "10/minute"
 
+    # --- Scheduling ---
+    # IANA zone used for the sending window and "today" (timestamps are still stored in UTC).
+    app_timezone: str = "Asia/Jakarta"
+    worker_tick_seconds: int = Field(default=60, ge=1)
+
+    # --- WhatsApp provider ---
+    # "fake" records messages in memory (development/tests); "gateway" talks to the WA gateway.
+    wa_provider: Literal["fake", "gateway"] = "fake"
+    wa_gateway_url: str = "http://127.0.0.1:8095"
+    wa_gateway_api_key: SecretStr | None = None
+    wa_webhook_secret: SecretStr | None = None
+
     # --- CORS ---
     backend_cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
@@ -85,6 +98,15 @@ class Settings(BaseSettings):
             if text.startswith("["):
                 return json.loads(text)
             return [origin.strip() for origin in text.split(",") if origin.strip()]
+        return value
+
+    @field_validator("app_timezone")
+    @classmethod
+    def timezone_must_exist(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError, OSError) as error:
+            raise ValueError(f"APP_TIMEZONE is not a valid IANA time zone: {value!r}.") from error
         return value
 
     @field_validator("cookie_domain", mode="before")
@@ -121,6 +143,11 @@ class Settings(BaseSettings):
             problems.append("DATABASE_ENGINE=sqlite is not allowed")
         if not self.refresh_cookie_secure:
             problems.append("COOKIE_SECURE must be true")
+        if self.wa_provider == "gateway":
+            if not (self.wa_gateway_api_key and self.wa_gateway_api_key.get_secret_value()):
+                problems.append("WA_GATEWAY_API_KEY must be set when WA_PROVIDER=gateway")
+            if not (self.wa_webhook_secret and self.wa_webhook_secret.get_secret_value()):
+                problems.append("WA_WEBHOOK_SECRET must be set when WA_PROVIDER=gateway")
         if problems:
             raise ValueError("Unsafe production configuration: " + "; ".join(problems) + ".")
 

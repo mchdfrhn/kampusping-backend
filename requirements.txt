@@ -16,3 +16,4 @@ asyncpg==0.31.0
 PyJWT==2.15.1
 argon2-cffi==25.1.0
 slowapi==0.1.10
+tzdata==2026.6

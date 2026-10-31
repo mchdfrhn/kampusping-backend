@@ -91,6 +91,10 @@ def _translate_validation_error(error: Mapping[str, Any]) -> str:
     if kind == "string_too_short":
         minimum = context.get("min_length", 1)
         return "Wajib diisi." if minimum <= 1 else f"Minimal {minimum} karakter."
+    if kind in {"greater_than_equal", "greater_than"}:
+        return f"Nilai minimal {context.get('ge', context.get('gt'))}."
+    if kind in {"less_than_equal", "less_than"}:
+        return f"Nilai maksimal {context.get('le', context.get('lt'))}."
     if kind == "string_too_long":
         return f"Maksimal {context.get('max_length')} karakter."
     if kind == "value_error":
