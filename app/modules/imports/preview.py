@@ -10,8 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.invoices.model import Invoice
 from app.modules.students.model import Student
 
-from .constants import MSG_DUPLICATE_CODE, MSG_NAME_REQUIRED
-from .existing import invoices_by_code, is_sticky_skip, students_by_nim
+from .constants import MSG_CODE_OTHER_STUDENT, MSG_DUPLICATE_CODE, MSG_NAME_REQUIRED
+from .existing import (
+    belongs_to_other_student,
+    invoice_owner_nims,
+    invoices_by_code,
+    is_sticky_skip,
+    students_by_nim,
+)
 from .parser import ParsedSheet
 from .validation import RowIssue, ValidRow, validate_row
 
@@ -42,10 +48,11 @@ async def build_preview(
             issues.extend(outcome)
 
     students = await students_by_nim(db, [row.nim for row in valid])
-    accepted, cross_issues = _cross_row_checks(valid, known_nims=set(students))
+    invoices = await invoices_by_code(db, [row.invoice_code for row in valid])
+    owners = await invoice_owner_nims(db, invoices)
+    accepted, cross_issues = _cross_row_checks(valid, known_nims=set(students), owners=owners)
     issues = sorted([*issues, *cross_issues], key=lambda issue: issue.row_number)
 
-    invoices = await invoices_by_code(db, [row.invoice_code for row in accepted])
     summary = {
         "rows_total": len(sheet.rows),
         "rows_valid": len(accepted),
@@ -56,9 +63,9 @@ async def build_preview(
 
 
 def _cross_row_checks(
-    rows: list[ValidRow], *, known_nims: set[str]
+    rows: list[ValidRow], *, known_nims: set[str], owners: dict[str, str]
 ) -> tuple[list[ValidRow], list[RowIssue]]:
-    """Drop repeated invoice codes and nameless rows for students that do not exist yet."""
+    """Drop repeated codes, codes owned by another NIM and nameless rows for new students."""
     accepted: list[ValidRow] = []
     issues: list[RowIssue] = []
     first_row_of_code: dict[str, int] = {}
@@ -67,6 +74,9 @@ def _cross_row_checks(
         if (first := first_row_of_code.get(row.invoice_code)) is not None:
             message = MSG_DUPLICATE_CODE.format(first_row=first)
             issues.append(RowIssue(row.row_number, "invoice_code", message))
+            continue
+        if belongs_to_other_student(row, owners):
+            issues.append(RowIssue(row.row_number, "invoice_code", MSG_CODE_OTHER_STUDENT))
             continue
         if row.nim not in known_nims and row.nim not in named_nims and not row.name:
             issues.append(RowIssue(row.row_number, "name", MSG_NAME_REQUIRED))

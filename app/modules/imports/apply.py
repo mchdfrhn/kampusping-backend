@@ -11,7 +11,13 @@ from app.modules.invoices.model import Invoice
 from app.modules.students.constants import PhoneStatus
 from app.modules.students.model import Student
 
-from .existing import invoices_by_code, is_sticky_skip, students_by_nim
+from .existing import (
+    belongs_to_other_student,
+    invoice_owner_nims,
+    invoices_by_code,
+    is_sticky_skip,
+    students_by_nim,
+)
 from .validation import ValidRow
 
 
@@ -44,6 +50,8 @@ def _apply_phone(student: Student, row: ValidRow) -> bool:
     if row.phone_raw:  # something was typed but it is not a usable number
         has_valid = bool(student.phone) and student.phone_status == PhoneStatus.VALID.value
         return False if has_valid else _set(student, "phone_status", PhoneStatus.INVALID.value)
+    # No number in the file: a student already flagged invalid stays flagged (the bad number is
+    # still the last thing we know); everyone else without a number is simply missing.
     if student.phone is None and student.phone_status != PhoneStatus.INVALID.value:
         return _set(student, "phone_status", PhoneStatus.MISSING.value)
     return False
@@ -109,8 +117,12 @@ async def apply_rows(
     against it only updates the other fields and counts as skipped. Invoices absent from the file
     are not touched.
     """
-    students = await students_by_nim(db, [row.nim for row in rows])
     invoices = await invoices_by_code(db, [row.invoice_code for row in rows])
+    # Preview already rejects these rows; check again because the database may have changed since.
+    # A skipped row is counted nowhere and touches neither its student nor the invoice.
+    owners = await invoice_owner_nims(db, invoices)
+    rows = [row for row in rows if not belongs_to_other_student(row, owners)]
+    students = await students_by_nim(db, [row.nim for row in rows])
 
     new_nims: set[str] = set()
     updated_nims: set[str] = set()

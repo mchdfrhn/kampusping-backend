@@ -5,6 +5,7 @@ across deleted rows, and applying a file restores a deleted match instead of col
 """
 
 from collections.abc import Iterator, Sequence
+from typing import TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +18,10 @@ from app.modules.students.model import Student
 from .constants import LOOKUP_CHUNK
 from .validation import ValidRow
 
+_T = TypeVar("_T")
 
-def _chunks(values: Sequence[str]) -> Iterator[Sequence[str]]:
+
+def _chunks(values: Sequence[_T]) -> Iterator[Sequence[_T]]:
     for start in range(0, len(values), LOOKUP_CHUNK):
         yield values[start : start + LOOKUP_CHUNK]
 
@@ -40,6 +43,29 @@ async def invoices_by_code(db: AsyncSession, codes: Sequence[str]) -> dict[str, 
         for invoice in await db.scalars(stmt):
             found[invoice.invoice_code] = invoice
     return found
+
+
+async def invoice_owner_nims(db: AsyncSession, invoices: dict[str, Invoice]) -> dict[str, str]:
+    """``invoice_code`` -> NIM of the student the stored invoice belongs to (deleted ones too)."""
+    student_ids = sorted({invoice.student_id for invoice in invoices.values()})
+    nim_by_id: dict[int, str] = {}
+    for chunk in _chunks(student_ids):
+        result = await db.execute(select(Student.id, Student.nim).where(Student.id.in_(chunk)))
+        nim_by_id.update(result.tuples().all())
+    return {
+        code: nim_by_id[invoice.student_id]
+        for code, invoice in invoices.items()
+        if invoice.student_id in nim_by_id
+    }
+
+
+def belongs_to_other_student(row: ValidRow, owners: dict[str, str]) -> bool:
+    """The invoice code exists and is stored for a different NIM than the row's (likely a typo).
+
+    Applying such a row would change, or mark paid, another student's invoice.
+    """
+    owner = owners.get(row.invoice_code)
+    return owner is not None and owner != row.nim
 
 
 def is_sticky_skip(invoice: Invoice, row: ValidRow) -> bool:

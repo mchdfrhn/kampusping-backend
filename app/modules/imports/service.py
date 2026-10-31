@@ -22,6 +22,7 @@ from .constants import (
     MAX_STORED_ISSUES,
     MSG_BATCH_NOT_FOUND,
     MSG_BATCH_NOT_PREVIEW,
+    MSG_NO_VALID_ROWS,
     ImportStatus,
 )
 from .model import ImportBatch, ImportRowError
@@ -117,7 +118,9 @@ class ImportService:
         simultaneous applies exactly one proceeds and the rest get 409. Any failure afterwards
         rolls the claim back together with the data changes.
         """
-        await self.get(batch_id)
+        existing = await self.get(batch_id)
+        if existing.status == ImportStatus.PREVIEW.value and not existing.summary.get("rows_valid"):
+            raise AppException(MSG_NO_VALID_ROWS, status_code=422, code=VALIDATION_ERROR)
         now = self.clock()
         claimed = await self.batches.claim_preview(
             batch_id,

@@ -36,3 +36,5 @@ MSG_BATCH_NOT_PREVIEW = (
 )
 MSG_DUPLICATE_CODE = "Kode tagihan duplikat dalam berkas (baris {first_row})."
 MSG_NAME_REQUIRED = "Nama wajib diisi untuk mahasiswa baru."
+MSG_CODE_OTHER_STUDENT = "Kode tagihan sudah terdaftar untuk NIM lain."
+MSG_NO_VALID_ROWS = "Tidak ada baris valid untuk diterapkan."
