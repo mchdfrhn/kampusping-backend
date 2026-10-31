@@ -24,6 +24,7 @@ dependencies = [
     "openpyxl==3.1.5",
     "python-multipart==0.0.33",
     "tzdata==2026.6",
+    "httpx==0.28.1",
 ]
 
 [project.optional-dependencies]
@@ -31,7 +32,6 @@ mysql = ["asyncmy==0.2.11"]
 dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.1",
-    "httpx==0.28.1",
     "aiosqlite==0.22.1",
     "ruff==0.15.20",
     "pyright==1.1.414",
