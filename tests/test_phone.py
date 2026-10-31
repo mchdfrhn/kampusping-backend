@@ -24,6 +24,11 @@ from app.shared.phone import normalize_phone
         (" 6,28123456789E+11 ", "+628123456789"),
         ("8.12345678E+10", "+6281234567800"),
         ("628123456789E0", "+628123456789"),
+        ("62812345678.0", "+62812345678"),  # text of a whole float: ".0" is not a digit to keep
+        ("628123456789,0", "+628123456789"),
+        ("628123456789.00", "+628123456789"),
+        (" 08123456789.0 ", "+628123456789"),
+        ("0812.3456.7890", "+6281234567890"),  # dots as digit grouping stay grouping
     ],
 )
 def test_normalize_phone_valid(raw: str | int | float, expected: str) -> None:
@@ -51,6 +56,9 @@ def test_normalize_phone_valid(raw: str | int | float, expected: str) -> None:
         "62008123456789",  # only one stray 0 is tolerated
         "00812345678",  # 00 is only an international prefix when followed by 62
         "1E+400",  # absurd exponent
+        "628123456789.5",  # a real decimal fraction is never digit-stripped into a number
+        "62812345678.50",
+        "628123456789,5",
         "6.28123456789E+10",  # 62812345678.9 is not a whole number
         "6.28123456789E-11",
         "-6.28123456789E+11",

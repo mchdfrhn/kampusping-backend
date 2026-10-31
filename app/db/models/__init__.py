@@ -2,6 +2,7 @@
 
 from app.modules.audit.model import AuditEvent
 from app.modules.auth.model import RefreshToken
+from app.modules.imports.model import ImportBatch, ImportRowError
 from app.modules.invoices.model import Invoice
 from app.modules.roles.model import Permission, Role, role_permissions
 from app.modules.settings.model import AppSettings
@@ -11,6 +12,8 @@ from app.modules.users.model import User, user_roles
 __all__ = [
     "AppSettings",
     "AuditEvent",
+    "ImportBatch",
+    "ImportRowError",
     "Invoice",
     "Permission",
     "RefreshToken",

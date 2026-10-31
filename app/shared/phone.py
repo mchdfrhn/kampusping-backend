@@ -8,6 +8,10 @@ _NON_DIGITS = re.compile(r"\D")
 # Text exported from a numeric spreadsheet column: "6.28123456789E+11" (comma decimals too).
 _SCIENTIFIC = re.compile(r"\d+(?:[.,]\d+)?[eE][+-]?\d+")
 _EXPONENT_MARK = re.compile(r"\d[eE]")
+# A single "." or "," followed by 1-2 digits at the very end reads as a decimal fraction
+# ("62812345678.0" is a whole float written as text), not as digit grouping ("0812 3456.7890").
+_DECIMAL_TAIL = re.compile(r"(?<=\d)[.,](\d{1,2})\Z")
+_ZERO_FRACTION = re.compile(r"(?<=\d)[.,]0{1,3}\Z")
 _MAX_SCIENTIFIC_MAGNITUDE = 30
 _COUNTRY_CODE = "62"
 _INTERNATIONAL_PREFIX = "00"
@@ -21,10 +25,11 @@ def normalize_phone(raw: str | int | float | None) -> str | None:
     """Return the number as ``+62...`` or ``None`` when it is not an Indonesian mobile number.
 
     Accepts text with any punctuation, integers and whole floats (spreadsheets often store phone
-    numbers as ``6.28123456789e11``). A leading ``0``, ``62`` or ``8`` is recognised as the
-    national prefix, the country code and a bare mobile number respectively. Two real-world
-    quirks are tolerated: the international ``00`` prefix (``0062812...``) and a single stray
-    ``0`` after the country code (``62 0812...``).
+    numbers as ``6.28123456789e11``). A zero-only fractional tail (``62812345678.0``) is dropped;
+    any other decimal fraction means it is not a phone number. A leading ``0``, ``62`` or ``8``
+    is recognised as the national prefix, the country code and a bare mobile number respectively.
+    Two real-world quirks are tolerated: the international ``00`` prefix (``0062812...``) and a
+    single stray ``0`` after the country code (``62 0812...``).
     """
     if raw is None or isinstance(raw, bool):
         return None
@@ -47,6 +52,9 @@ def normalize_phone(raw: str | int | float | None) -> str | None:
     elif _EXPONENT_MARK.search(text):  # never digit-strip an exponent into a different number
         return None
     else:
+        text = _strip_fraction(text)
+        if text is None:
+            return None
         digits = _NON_DIGITS.sub("", text)
     if digits.startswith(_INTERNATIONAL_PREFIX + _COUNTRY_CODE):
         digits = digits[len(_INTERNATIONAL_PREFIX) :]
@@ -64,6 +72,21 @@ def normalize_phone(raw: str | int | float | None) -> str | None:
     if not _NATIONAL_MOBILE.fullmatch(national):
         return None
     return f"+62{national}"
+
+
+def _strip_fraction(text: str) -> str | None:
+    """Drop a zero-only fractional tail (``.0``, ``,00``); ``None`` for any other decimal fraction.
+
+    Only a text with exactly one ``.``/``,`` is considered, so digit grouping such as
+    ``0812.3456.7890`` is left alone.
+    """
+    if len(re.findall(r"[.,]", text)) != 1:
+        return text
+    if _ZERO_FRACTION.search(text):
+        return _ZERO_FRACTION.sub("", text)
+    if _DECIMAL_TAIL.search(text):
+        return None
+    return text
 
 
 def _scientific_digits(text: str) -> str | None:
