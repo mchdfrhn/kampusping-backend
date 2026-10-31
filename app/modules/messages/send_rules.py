@@ -70,12 +70,6 @@ class Verdict:
     error: str | None = None
 
 
-def as_utc(now: datetime) -> datetime:
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("now must be timezone-aware")
-    return now.astimezone(UTC)
-
-
 def local_day(local: datetime) -> tuple[datetime, datetime]:
     """The local calendar day containing ``local`` as a UTC interval ``[start, end)``."""
     start = datetime.combine(local.date(), time(0), tzinfo=local.tzinfo)

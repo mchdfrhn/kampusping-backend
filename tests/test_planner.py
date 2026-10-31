@@ -1,4 +1,5 @@
-from datetime import UTC, date, datetime, timedelta
+import logging
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -422,6 +423,84 @@ async def test_supersede_leaves_sent_messages_alone() -> None:
     assert by_id == {sent: MessageStatus.SENT.value, queued: MessageStatus.QUEUED.value}
 
 
+async def test_history_is_not_rewritten_by_expiry_or_escalation() -> None:
+    student_id = await add_student()
+    # Due 25 October: escalates now. Every message is far older than the 3-day window.
+    invoice_id = await add_invoice(student_id, due=date(2026, 10, 25))
+    sent_rule = await add_rule(-7)
+    delivered_rule = await add_rule(-3)
+    sent = await add_message(
+        invoice_id, student_id, scheduled=date(2026, 10, 18), rule_id=sent_rule, status="sent"
+    )
+    delivered = await add_message(
+        invoice_id,
+        student_id,
+        scheduled=date(2026, 10, 22),
+        rule_id=delivered_rule,
+        status="delivered",
+    )
+
+    report = await run_planner()
+
+    assert report.escalated == 1
+    assert report.expired == 0
+    by_id = {m.id: m for m in await all_messages()}
+    assert by_id[sent].status == "sent"
+    assert by_id[delivered].status == "delivered"
+    assert by_id[sent].cancel_reason is None
+    assert by_id[delivered].cancel_reason is None
+
+
+@pytest.mark.parametrize("mechanism", ["supersede", "expiry", "escalation"])
+async def test_queued_manual_message_survives_with_the_auto_ones(mechanism: str) -> None:
+    student_id = await add_student()
+    due = date(2026, 10, 25) if mechanism == "escalation" else date(2026, 12, 31)
+    invoice_id = await add_invoice(student_id, due=due)
+    old_day = date(2026, 11, 1) if mechanism == "expiry" else TODAY
+    auto = await add_message(invoice_id, student_id, scheduled=old_day)
+    if mechanism == "supersede":
+        await add_message(invoice_id, student_id, scheduled=TODAY)
+    manual = await add_message(
+        invoice_id, student_id, scheduled=old_day, kind=MessageKind.MANUAL.value
+    )
+
+    await run_planner()
+
+    by_id = {m.id: m for m in await all_messages()}
+    assert by_id[auto].status == MessageStatus.CANCELLED.value
+    assert (
+        by_id[auto].cancel_reason
+        == {
+            "supersede": CancelReason.SUPERSEDED.value,
+            "expiry": CancelReason.EXPIRED.value,
+            "escalation": CancelReason.ESCALATED.value,
+        }[mechanism]
+    )
+    assert by_id[manual].status == MessageStatus.QUEUED.value
+    assert by_id[manual].cancel_reason is None
+
+
+async def test_supersede_is_per_invoice() -> None:
+    student_id = await add_student()
+    first_invoice = await add_invoice(student_id, due=date(2026, 12, 31), code="A")
+    second_invoice = await add_invoice(student_id, due=date(2026, 12, 31), code="B")
+    first_old = await add_message(first_invoice, student_id, scheduled=date(2026, 11, 13))
+    first_new = await add_message(first_invoice, student_id, scheduled=TODAY)
+    second_old = await add_message(second_invoice, student_id, scheduled=date(2026, 11, 14))
+    second_new = await add_message(second_invoice, student_id, scheduled=TODAY)
+
+    report = await run_planner()
+
+    assert report.superseded == 2
+    by_id = {m.id: m.status for m in await all_messages()}
+    assert by_id == {
+        first_old: MessageStatus.CANCELLED.value,
+        first_new: MessageStatus.QUEUED.value,
+        second_old: MessageStatus.CANCELLED.value,
+        second_new: MessageStatus.QUEUED.value,
+    }
+
+
 async def test_invoice_past_escalation_offset_gets_escalated_at_and_no_message() -> None:
     student_id = await add_student()
     # Default escalation offset is 14 days: due 25 October escalates on 8 November.
@@ -514,6 +593,7 @@ async def test_message_body_is_rendered_at_planning_time_with_footer() -> None:
         invoice.student.name = "Nama Baru"
         rule.template.body = "Isi baru"
         await db.commit()
+    await run_planner()  # planning again must neither re-render nor duplicate
     (after,) = await all_messages()
     assert after.body == message.body
 
@@ -563,6 +643,44 @@ async def test_insert_messages_skips_duplicates_and_keeps_the_rest() -> None:
 async def test_naive_now_is_rejected() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         await run_planner(datetime(2026, 11, 15, 3, 0))  # naive on purpose
+
+
+async def test_injected_now_is_stored_in_utc_on_every_timestamp() -> None:
+    await plain_setup()
+    jakarta_now = NOW.astimezone(timezone(timedelta(hours=7)))  # same instant, +07:00 offset
+
+    await run_planner(jakarta_now)
+
+    (message,) = await all_messages()
+    assert ensure_utc(message.queued_at) == NOW
+    assert ensure_utc(message.created_at) == NOW
+    assert ensure_utc(message.updated_at) == NOW
+
+
+async def test_skipped_duplicates_are_logged(caplog: pytest.LogCaptureFixture) -> None:
+    student_id, invoice_id, rule_id = await plain_setup()
+    await add_message(invoice_id, student_id, scheduled=TODAY, rule_id=rule_id)
+    row = {
+        "student_id": student_id,
+        "invoice_id": invoice_id,
+        "rule_id": rule_id,
+        "kind": "auto",
+        "scheduled_date": TODAY,
+        "body": "x",
+        "status": "queued",
+        "queued_at": NOW,
+    }
+    caplog.set_level(logging.INFO, logger="app.modules.messages.repository")
+
+    async with get_session_factory()() as db:
+        assert await MessageRepository(db).insert_messages([row]) == 0
+        await db.commit()
+
+    assert any(
+        "skipped 1" in r.getMessage()
+        for r in caplog.records
+        if r.name == "app.modules.messages.repository"
+    )
 
 
 # --- Scale ---------------------------------------------------------------------------------

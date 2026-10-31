@@ -1,5 +1,6 @@
 """Set-based queries behind the planner. Everything here only flushes; the caller commits."""
 
+import logging
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -19,6 +20,8 @@ from app.modules.templates.model import MessageTemplate
 
 from .constants import SYSTEM_ACTOR, CancelReason, MessageKind, MessageStatus
 from .model import Message
+
+logger = logging.getLogger(__name__)
 
 # Stay well below SQLite's bound-parameter limit when filtering by a list of ids.
 ID_CHUNK_SIZE = 500
@@ -124,6 +127,9 @@ class MessageRepository:
             except IntegrityError:
                 continue
             inserted += 1
+        skipped = len(rows) - inserted
+        if skipped:
+            logger.info("Planner: skipped %s message(s) already planned by another run", skipped)
         return inserted
 
     async def cancel_queued_for_escalation(

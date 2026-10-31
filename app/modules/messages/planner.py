@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings as config
 from app.modules.settings.service import SettingsService
 from app.modules.templates.rendering import build_message_body
-from app.shared.clock import local_today
+from app.shared.clock import as_utc, local_today
 
 from .constants import PLANNING_WINDOW_DAYS, SYSTEM_ACTOR, MessageKind, MessageStatus
 from .repository import MessageRepository
@@ -28,7 +28,12 @@ class PlanReport:
 
 
 async def plan_messages(db: AsyncSession, *, now: datetime) -> PlanReport:
-    """Run one planning pass and commit. ``now`` must be timezone-aware (UTC)."""
+    """Run one planning pass and commit.
+
+    ``now`` must be timezone-aware; any offset is accepted and normalised to UTC, the zone every
+    stored timestamp uses (SQLite keeps only the wall-clock value).
+    """
+    now = as_utc(now)
     settings = await SettingsService(db).get()
     today = local_today(now, config.app_timezone)
     repo = MessageRepository(db)
@@ -57,6 +62,9 @@ async def plan_messages(db: AsyncSession, *, now: datetime) -> PlanReport:
                 ),
                 "status": MessageStatus.QUEUED.value,
                 "queued_at": now,
+                # Explicit, so the injected clock wins over the column defaults (real time).
+                "created_at": now,
+                "updated_at": now,
                 "created_by": SYSTEM_ACTOR,
                 "updated_by": SYSTEM_ACTOR,
             }

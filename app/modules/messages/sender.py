@@ -37,7 +37,7 @@ from app.modules.whatsapp.provider import (
     SendResult,
     WhatsAppProvider,
 )
-from app.shared.clock import Clock, local_now
+from app.shared.clock import Clock, as_utc, local_now
 from app.shared.phone import mask_phone
 
 from .constants import (
@@ -50,7 +50,7 @@ from .constants import (
 )
 from .model import Message
 from .send_repository import SendRepository
-from .send_rules import SendSettings, as_utc, local_day, recheck, schedule_open, short_error
+from .send_rules import SendSettings, local_day, recheck, schedule_open, short_error
 
 logger = logging.getLogger(__name__)
 
