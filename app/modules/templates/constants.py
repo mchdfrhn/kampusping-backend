@@ -1,0 +1,10 @@
+TEMPLATE_NAME_MAX_LENGTH = 100
+TEMPLATE_BODY_MAX_LENGTH = 2000
+
+DEFAULT_REMINDER_TEMPLATE_NAME = "Pengingat sebelum jatuh tempo"
+DEFAULT_ARREARS_TEMPLATE_NAME = "Tunggakan setelah jatuh tempo"
+
+AUDIT_TEMPLATE_CREATED = "template.created"
+AUDIT_TEMPLATE_UPDATED = "template.updated"
+AUDIT_TEMPLATE_DELETED = "template.deleted"
+AUDIT_ENTITY_TEMPLATE = "template"

@@ -1,6 +1,7 @@
 """Operational commands.
 
-python -m app.cli seed                 # sync permissions + system roles (idempotent)
+python -m app.cli seed                 # sync permissions + system roles, and the default
+                                       # message templates + schedule rules (first run only)
 python -m app.cli create-admin         # first administrator (prompts / reads INITIAL_ADMIN_*)
 python -m app.cli purge-tokens         # delete expired refresh tokens
 """
@@ -19,6 +20,7 @@ from app.db.seed import seed_reference_data
 from app.db.session import get_engine, get_session_factory
 from app.modules.auth.repository import RefreshTokenRepository
 from app.modules.roles.repository import RoleRepository
+from app.modules.templates.seed import seed_default_templates_and_rules
 from app.modules.users.model import User
 from app.modules.users.repository import UserRepository
 from app.shared.utils import utc_now
@@ -27,7 +29,10 @@ from app.shared.utils import utc_now
 async def _seed() -> None:
     async with get_session_factory()() as db:
         await seed_reference_data(db)
+        created = await seed_default_templates_and_rules(db)
     print("Permissions and system roles are up to date.")
+    if created:
+        print("Default message templates and schedule rules created.")
 
 
 async def _create_admin(email: str, full_name: str, password: str) -> None:
@@ -40,6 +45,7 @@ async def _create_admin(email: str, full_name: str, password: str) -> None:
 
     async with get_session_factory()() as db:
         await seed_reference_data(db)
+        await seed_default_templates_and_rules(db)
         users = UserRepository(db)
         if await users.get_by_email(email, include_deleted=True):
             raise SystemExit(f"A user with email {email} already exists.")

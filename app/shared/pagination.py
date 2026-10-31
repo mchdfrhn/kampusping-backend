@@ -30,23 +30,32 @@ class ListParams:
         return (self.page - 1) * self.page_size
 
 
-def get_list_params(
-    page: Annotated[int, Query(ge=1)] = 1,
-    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
-    search: Annotated[str | None, Query(max_length=100)] = None,
-    sort_by: Annotated[str | None, Query(max_length=50)] = None,
-    sort_order: SortOrder = SortOrder.DESC,
-) -> ListParams:
-    return ListParams(
-        page=page,
-        page_size=page_size,
-        search=search.strip() if search and search.strip() else None,
-        sort_by=sort_by,
-        sort_order=sort_order,
-    )
+def _list_params_dependency(default_order: SortOrder):
+    """Build the list-query dependency; only the default of ``sort_order`` differs."""
 
+    def get_list_params(
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+        search: Annotated[str | None, Query(max_length=100)] = None,
+        sort_by: Annotated[str | None, Query(max_length=50)] = None,
+        sort_order: SortOrder = default_order,
+    ) -> ListParams:
+        return ListParams(
+            page=page,
+            page_size=page_size,
+            search=search.strip() if search and search.strip() else None,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+
+    return get_list_params
+
+
+get_list_params = _list_params_dependency(SortOrder.DESC)
 
 ListQuery = Annotated[ListParams, Depends(get_list_params)]
+# For lists that read best in ascending order by default (e.g. a timeline or an A-Z list).
+AscListQuery = Annotated[ListParams, Depends(_list_params_dependency(SortOrder.ASC))]
 
 
 class Page(BaseModel, Generic[T]):
