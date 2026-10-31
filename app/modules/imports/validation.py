@@ -41,6 +41,11 @@ _SEPARATORS = re.compile(r"[.,]")
 _PAID = frozenset({"lunas", "sudah bayar", "terbayar", "paid", "1", "y", "ya", "true"})
 _UNPAID = frozenset({"belum lunas", "belum bayar", "unpaid", "0", "n", "tidak", "false"})
 
+# Longest amount / serial text worth parsing; longer text is rejected before any int() call
+# (Python refuses int() of more than 4300 digits, which a hostile cell could trigger).
+_MAX_NUMERIC_TEXT = 30
+_UNREPRESENTABLE_NUMBER = "#" * 100  # stands in for an int too large to print; fails length checks
+
 _DATE_HINT = "(gunakan YYYY-MM-DD atau DD/MM/YYYY)"
 
 
@@ -87,6 +92,11 @@ def cell_text(value: object) -> str:
         return str(value)
     if isinstance(value, float) and math.isfinite(value) and value.is_integer():
         return str(int(value))
+    if isinstance(value, int):
+        try:
+            return str(value)
+        except ValueError:  # beyond Python's int-to-str digit limit
+            return _UNREPRESENTABLE_NUMBER
     if isinstance(value, datetime | date):
         return value.isoformat()
     return str(value).replace("\ufeff", "").replace("\u00a0", " ").strip()
@@ -107,7 +117,7 @@ def parse_amount(value: object) -> int | None:
         return _checked_amount(int(value))
 
     text = _AMOUNT_PREFIX.sub("", cell_text(value).replace(" ", "").lower())
-    if not _AMOUNT_CHARS.fullmatch(text):
+    if len(text) > _MAX_NUMERIC_TEXT or not _AMOUNT_CHARS.fullmatch(text):
         return None
     last = max(text.rfind("."), text.rfind(","))
     if last == -1:
@@ -149,7 +159,7 @@ def parse_date(value: object) -> date | None:
         return _excel_serial(value)
 
     text = cell_text(value)
-    if _DIGITS_ONLY.fullmatch(text):
+    if len(text) <= _MAX_NUMERIC_TEXT and _DIGITS_ONLY.fullmatch(text):
         return _excel_serial(float(text))
     if match := _DATE_ISO.fullmatch(text):
         year, month, day = (int(part) for part in match.groups())
@@ -164,7 +174,7 @@ def parse_date(value: object) -> date | None:
 
 
 def _excel_serial(number: float) -> date | None:
-    if not math.isfinite(number) or not number.is_integer():
+    if isinstance(number, float) and (not math.isfinite(number) or not number.is_integer()):
         return None
     if not _EXCEL_SERIAL_MIN <= number <= _EXCEL_SERIAL_MAX:
         return None
@@ -212,17 +222,25 @@ def validate_row(
     def issue(field: str, message: str) -> None:
         issues.append(RowIssue(row_number, field, message))
 
+    def fractional(field: str) -> bool:
+        cell = raw(field)
+        return isinstance(cell, float) and not (math.isfinite(cell) and cell.is_integer())
+
     def required_text(field: str, label: str, max_length: int) -> str:
         value = text(field)
         if not value:
             issue(field, f"{label} wajib diisi.")
+        elif fractional(field):
+            issue(field, f"{label} tidak valid (gunakan teks atau angka bulat).")
         elif len(value) > max_length:
             issue(field, f"{label} maksimal {max_length} karakter.")
         return value
 
     def optional_text(field: str, label: str, max_length: int) -> str | None:
         value = text(field)
-        if len(value) > max_length:
+        if fractional(field):
+            issue(field, f"{label} tidak valid (gunakan teks atau angka bulat).")
+        elif len(value) > max_length:
             issue(field, f"{label} maksimal {max_length} karakter.")
         return value or None
 

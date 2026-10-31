@@ -19,6 +19,11 @@ from app.shared.phone import normalize_phone
         ("+62 0812-3456-789", "+628123456789"),
         ("0062812345678", "+62812345678"),  # international 00 prefix
         ("+0062 812 3456 789", "+628123456789"),
+        ("6.28123456789E+11", "+628123456789"),  # Excel/LibreOffice CSV export of a number
+        ("6.28123456789e11", "+628123456789"),
+        (" 6,28123456789E+11 ", "+628123456789"),
+        ("8.12345678E+10", "+6281234567800"),
+        ("628123456789E0", "+628123456789"),
     ],
 )
 def test_normalize_phone_valid(raw: str | int | float, expected: str) -> None:
@@ -45,6 +50,15 @@ def test_normalize_phone_valid(raw: str | int | float, expected: str) -> None:
         -6.28123456789e11,
         "62008123456789",  # only one stray 0 is tolerated
         "00812345678",  # 00 is only an international prefix when followed by 62
+        "1E+400",  # absurd exponent
+        "6.28123456789E+10",  # 62812345678.9 is not a whole number
+        "6.28123456789E-11",
+        "-6.28123456789E+11",
+        "6.28123456789E+",
+        "62812E+1x",
+        "62812abc34",
+        "08123456E78901",  # an e between digits is never digit-stripped into a number
+        "0812345e67890",
         "006208123456",  # too short after 62 and the stray 0
         pytest.param(10**5000, id="huge-int"),  # beyond Python's int-to-str digit limit
         pytest.param(-(10**5000), id="huge-negative-int"),

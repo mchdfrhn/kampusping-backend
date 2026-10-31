@@ -125,9 +125,10 @@ def _xlsx_records(content: bytes) -> Iterator[tuple[int, list[object]]]:
         if not workbook.worksheets:
             raise ImportFileError("Berkas .xlsx tidak memiliki lembar kerja.")
         try:
-            for number, record in enumerate(
-                workbook.worksheets[0].iter_rows(values_only=True), start=1
-            ):
+            sheet = workbook.worksheets[0]
+            # Third-party exporters often write a wrong <dimension>; scan the real data instead.
+            sheet.reset_dimensions()
+            for number, record in enumerate(sheet.iter_rows(values_only=True), start=1):
                 yield number, list(record)
         except ImportFileError:
             raise

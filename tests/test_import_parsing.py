@@ -1,6 +1,8 @@
 """Pure parsing and validation of SIAKAD/SIPEMA export files (no database)."""
 
 import io
+import re
+import zipfile
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 
@@ -162,19 +164,57 @@ def test_rejects_over_limits_and_bad_extension() -> None:
 
 
 @pytest.mark.parametrize(
-    ("filename", "content"),
+    ("filename", "content", "message"),
     [
-        ("empty.csv", b""),
-        ("blank.csv", b"\n\n,,\n"),
-        ("header-only.csv", b"NIM,Nominal\n"),
-        ("header-only.xlsx", make_xlsx([["NIM", "Nominal"]])),
-        ("corrupt.xlsx", b"this is not a zip file"),
-        pytest.param("huge-field.csv", b"NIM\n" + b"x" * 200_000 + b"\n", id="huge-field"),
+        ("empty.csv", b"", "Berkas kosong."),
+        ("blank.csv", b"\n" + b"\n,,\n", "Berkas kosong."),
+        ("header-only.csv", b"NIM,Nominal\n", "Berkas tidak berisi baris data."),
+        (
+            "header-only.xlsx",
+            make_xlsx([["NIM", "Nominal"]]),
+            "Berkas tidak berisi baris data.",
+        ),
+        ("corrupt.xlsx", b"this is not a zip file", "Berkas .xlsx tidak dapat dibaca."),
+        pytest.param(
+            "huge-field.csv",
+            b"NIM\n" + b"x" * 200_000 + b"\n",
+            "Berkas CSV tidak dapat dibaca.",
+            id="huge-field",
+        ),
     ],
 )
-def test_empty_or_unreadable_files_are_import_errors(filename: str, content: bytes) -> None:
-    with pytest.raises(ImportFileError):
+def test_empty_or_unreadable_files_are_import_errors(
+    filename: str, content: bytes, message: str
+) -> None:
+    with pytest.raises(ImportFileError) as excinfo:
         parse_upload(filename, content)
+    assert str(excinfo.value) == message
+
+
+def rewrite_sheet_dimension(content: bytes, ref: str) -> bytes:
+    """Return the workbook with its first sheet's declared dimension replaced by ``ref``."""
+    source = zipfile.ZipFile(io.BytesIO(content))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                text = data.decode("utf-8")
+                assert "<dimension" in text
+                data = re.sub(r'<dimension ref="[^"]*"', f'<dimension ref="{ref}"', text).encode()
+            target.writestr(item, data)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("ref", ["A1:A1", "A1:B2", "A1"])
+def test_xlsx_with_a_wrong_declared_dimension_is_still_read_completely(ref: str) -> None:
+    content = make_xlsx(
+        [["NIM", "Kode Tagihan", "Nominal"], ["1", "A", 100], ["2", "B", 200], ["3", "C", 300]]
+    )
+    sheet = parse_upload("x.xlsx", rewrite_sheet_dimension(content, ref))
+    assert sheet.headers == ["NIM", "Kode Tagihan", "Nominal"]
+    assert sheet.rows == [["1", "A", 100], ["2", "B", 200], ["3", "C", 300]]
+    assert sheet.row_numbers == [2, 3, 4]
 
 
 # --- headers ----------------------------------------------------------------------------------
@@ -249,6 +289,32 @@ def test_parse_amount_accepts_common_formats(raw: object) -> None:
 )  # fmt: skip
 def test_parse_amount_rejects_bad_values(raw: object) -> None:
     assert parse_amount(raw) is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param("1" * 5000, id="long-digits"),
+        pytest.param("1." + "000." * 2000 + "000", id="long-grouped"),
+        pytest.param("1," + "0" * 5000, id="long-decimals"),
+        pytest.param(10**5000, id="huge-int"),
+    ],
+)
+def test_parse_amount_never_raises_on_hostile_text(raw: object) -> None:
+    assert parse_amount(raw) is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param("9" * 5000, id="long-digits"),
+        pytest.param("1" * 5000 + ".0", id="long-digits-decimal"),
+        pytest.param(10**5000, id="huge-int"),
+        pytest.param(2.0**1000, id="huge-float"),
+    ],
+)
+def test_parse_date_never_raises_on_hostile_numbers(raw: object) -> None:
+    assert parse_date(raw) is None
 
 
 def test_parse_amount_thousand_group_versus_decimals() -> None:
@@ -440,6 +506,36 @@ def test_row_issues_are_indonesian_and_per_field() -> None:
         "paid_via": "Kanal pembayaran tidak dikenali (gunakan siakad atau sipema).",
     }
     assert all(issue.row_number == 7 for issue in result)
+
+
+def test_hostile_cells_give_issues_instead_of_exceptions() -> None:
+    result = row_from(
+        {
+            **BASE,
+            "amount": "1" * 5000,
+            "due_date": "9" * 5000,
+            "nim": 10**5000,
+            "phone": "9" * 5000,
+            "status": "x" * 5000,
+        }
+    )
+    assert isinstance(result, list)
+    assert {issue.field for issue in result} == {"amount", "due_date", "nim", "status"}
+
+
+@pytest.mark.parametrize("field", ["nim", "invoice_code", "cohort"])
+def test_fractional_numbers_are_not_accepted_as_identifiers(field: str) -> None:
+    result = row_from({**BASE, field: 20210001.5})
+    assert isinstance(result, list)
+    assert [issue.field for issue in result] == [field]
+    assert "tidak valid" in result[0].message
+
+
+def test_scientific_notation_phone_text_end_to_end() -> None:
+    result = row_from({**BASE, "phone": "6.28123456789E+11"})
+    assert isinstance(result, ValidRow)
+    assert result.phone == "+628123456789"
+    assert result.phone_raw == "6.28123456789E+11"
 
 
 def test_over_long_fields_are_issues() -> None:

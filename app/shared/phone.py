@@ -2,8 +2,13 @@
 
 import math
 import re
+from decimal import Decimal, InvalidOperation
 
 _NON_DIGITS = re.compile(r"\D")
+# Text exported from a numeric spreadsheet column: "6.28123456789E+11" (comma decimals too).
+_SCIENTIFIC = re.compile(r"\d+(?:[.,]\d+)?[eE][+-]?\d+")
+_EXPONENT_MARK = re.compile(r"\d[eE]")
+_MAX_SCIENTIFIC_MAGNITUDE = 30
 _COUNTRY_CODE = "62"
 _INTERNATIONAL_PREFIX = "00"
 # After the 62 country code: a mobile number starts with 8 and has 9-12 digits in total.
@@ -34,7 +39,15 @@ def normalize_phone(raw: str | int | float | None) -> str | None:
     except ValueError:  # an int beyond Python's int-to-str digit limit
         return None
 
-    digits = _NON_DIGITS.sub("", text)
+    text = text.strip()
+    if _SCIENTIFIC.fullmatch(text):
+        digits = _scientific_digits(text)
+        if digits is None:
+            return None
+    elif _EXPONENT_MARK.search(text):  # never digit-strip an exponent into a different number
+        return None
+    else:
+        digits = _NON_DIGITS.sub("", text)
     if digits.startswith(_INTERNATIONAL_PREFIX + _COUNTRY_CODE):
         digits = digits[len(_INTERNATIONAL_PREFIX) :]
     if digits.startswith(_COUNTRY_CODE):
@@ -51,6 +64,19 @@ def normalize_phone(raw: str | int | float | None) -> str | None:
     if not _NATIONAL_MOBILE.fullmatch(national):
         return None
     return f"+62{national}"
+
+
+def _scientific_digits(text: str) -> str | None:
+    """Digits of a whole, non-negative number written as ``6.28123456789E+11``; else ``None``."""
+    try:
+        number = Decimal(text.replace(",", "."))
+    except InvalidOperation:
+        return None
+    if not number.is_finite() or number.adjusted() > _MAX_SCIENTIFIC_MAGNITUDE:
+        return None
+    if number != number.to_integral_value():
+        return None
+    return str(int(number))
 
 
 def mask_phone(phone: str | None) -> str | None:
