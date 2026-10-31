@@ -55,4 +55,5 @@ MAX_ERROR_LENGTH = 200
 ERROR_DELETED = "Mahasiswa atau tagihan sudah dihapus."
 ERROR_TOO_LONG = "Pesan terlalu panjang."
 ERROR_NOT_ON_WHATSAPP = "Nomor tidak terdaftar di WhatsApp."
+ERROR_REJECTED = "Permintaan ditolak gateway."
 ERROR_INTERNAL = "Terjadi kesalahan internal saat memproses pesan."

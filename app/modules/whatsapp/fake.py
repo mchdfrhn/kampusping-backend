@@ -28,7 +28,11 @@ class FakeProvider:
     _counter: int = field(default=0, repr=False)
 
     def fail_next(self, exc: Exception, times: int = 1) -> None:
-        """Make the next ``times`` sends raise ``exc``."""
+        """Make the next ``times`` sends raise ``exc``.
+
+        Any exception works: ``ProviderUnavailable`` (transient), ``ProviderRejected``
+        (permanent bad request), ``NotOnWhatsApp`` or an arbitrary error.
+        """
         self._failures.extend([exc] * times)
 
     async def send(self, *, phone: str, text: str, client_ref: str) -> SendResult:

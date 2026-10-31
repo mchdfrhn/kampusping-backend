@@ -22,6 +22,7 @@ from app.modules.students.model import Student
 from app.modules.whatsapp.fake import FakeProvider
 from app.modules.whatsapp.provider import (
     NotOnWhatsApp,
+    ProviderRejected,
     ProviderStatus,
     ProviderUnavailable,
 )
@@ -635,6 +636,34 @@ async def test_not_on_whatsapp_fails_immediately_and_marks_student_invalid() -> 
     assert follow_up.status == "cancelled"
     assert follow_up.cancel_reason == "phone_invalid"
     assert (await get_settings()).consecutive_failures == 0
+
+
+async def test_provider_rejected_fails_immediately_and_counts_as_failure() -> None:
+    message_id = await queued_message()
+    other = await queued_message()
+    fake = FakeProvider()
+    fake.fail_next(ProviderRejected("anything the provider says"))
+
+    assert await run(fake) == 2
+
+    message = await get_message(message_id)
+    assert message.status == "failed"
+    assert message.error == "Permintaan ditolak gateway."
+    assert message.attempts == 1
+    assert message.next_attempt_at is None
+    assert (await get_message(other)).status == "sent"  # the queue carries on
+
+
+async def test_provider_rejected_counts_towards_the_breaker() -> None:
+    await configure(consecutive_failures=4)
+    await queued_message()
+    untouched = await queued_message()
+    fake = FakeProvider()
+    fake.fail_next(ProviderRejected("Permintaan ditolak gateway."))
+
+    assert await run(fake) == 1
+    assert (await get_settings()).paused_reason == "circuit_breaker"
+    assert (await get_message(untouched)).status == "queued"
 
 
 async def test_one_failure_does_not_stop_the_rest() -> None:

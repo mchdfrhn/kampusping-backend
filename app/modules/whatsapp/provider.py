@@ -29,6 +29,10 @@ class ProviderUnavailable(ProviderError):
     """The provider could not deliver right now (transient, or misconfigured)."""
 
 
+class ProviderRejected(ProviderError):
+    """The provider refused this request as malformed (permanent; retrying cannot help)."""
+
+
 class WhatsAppProvider(Protocol):
     async def send(self, *, phone: str, text: str, client_ref: str) -> SendResult: ...
 

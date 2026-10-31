@@ -32,6 +32,7 @@ from app.modules.students.model import Student
 from app.modules.whatsapp.provider import (
     NotOnWhatsApp,
     ProviderError,
+    ProviderRejected,
     ProviderUnavailable,
     SendResult,
     WhatsAppProvider,
@@ -42,6 +43,7 @@ from app.shared.phone import mask_phone
 from .constants import (
     ERROR_INTERNAL,
     ERROR_NOT_ON_WHATSAPP,
+    ERROR_REJECTED,
     RETRY_DELAYS_MINUTES,
     MessageKind,
     MessageStatus,
@@ -347,8 +349,10 @@ async def _record_failure(
         logger.info("Send phase: %s is not on WhatsApp (message %s)", masked, ready.message_id)
         return _Step("failed", called_provider=True)
 
-    error = short_error(exc)
-    if attempts < settings.max_attempts:
+    # A rejected request is permanent: it fails at once but, like any failure, counts.
+    rejected = isinstance(exc, ProviderRejected)
+    error = ERROR_REJECTED if rejected else short_error(exc)
+    if not rejected and attempts < settings.max_attempts:
         delay = RETRY_DELAYS_MINUTES[min(attempts, len(RETRY_DELAYS_MINUTES)) - 1]
         await repo.update_message(
             ready.message_id,

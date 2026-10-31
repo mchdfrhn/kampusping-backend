@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Any
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from app.modules.whatsapp.gateway import GatewayProvider
 from app.modules.whatsapp.provider import (
     NotOnWhatsApp,
     ProviderError,
+    ProviderRejected,
     ProviderStatus,
     ProviderUnavailable,
     SendResult,
@@ -146,6 +148,83 @@ async def test_gateway_non_json_200_body_is_unavailable() -> None:
 async def test_gateway_errors_are_provider_errors() -> None:
     assert issubclass(NotOnWhatsApp, ProviderError)
     assert issubclass(ProviderUnavailable, ProviderError)
+    assert issubclass(ProviderRejected, ProviderError)
+    assert not issubclass(ProviderRejected, ProviderUnavailable)
+
+
+@pytest.mark.parametrize("status_code", [400, 409, 413, 422])
+async def test_gateway_bad_request_is_rejected_not_unavailable(status_code: int) -> None:
+    gateway = make_gateway(json_transport(status_code, {"error": "bad_request", "detail": "X"}))
+    with pytest.raises(ProviderRejected) as info:
+        await gateway.send(phone=PHONE, text=TEXT, client_ref="r")
+    assert str(info.value) == "Permintaan ditolak gateway."
+
+
+async def test_gateway_429_is_unavailable() -> None:
+    gateway = make_gateway(json_transport(429, {"error": "rate_limited"}))
+    with pytest.raises(ProviderUnavailable):
+        await gateway.send(phone=PHONE, text=TEXT, client_ref="r")
+
+
+async def test_gateway_redirect_is_a_failure_everywhere() -> None:
+    def redirect(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"Location": "http://elsewhere.test/"}, json={})
+
+    gateway = make_gateway(httpx.MockTransport(redirect))
+    with pytest.raises(ProviderUnavailable):
+        await gateway.send(phone=PHONE, text=TEXT, client_ref="r")
+    with pytest.raises(ProviderUnavailable):
+        await gateway.status()
+    with pytest.raises(ProviderUnavailable):
+        await gateway.logout()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.DecodingError("garbled"),
+        httpx.TooManyRedirects("loop"),
+        httpx.UnsupportedProtocol("ftp"),
+    ],
+    ids=["decoding", "redirects", "protocol"],
+)
+async def test_gateway_any_request_error_is_unavailable(error: httpx.RequestError) -> None:
+    def fail(request: httpx.Request) -> httpx.Response:
+        error.request = request
+        raise error
+
+    gateway = make_gateway(httpx.MockTransport(fail))
+    with pytest.raises(ProviderUnavailable):
+        await gateway.send(phone=PHONE, text=TEXT, client_ref="r")
+    with pytest.raises(ProviderUnavailable):
+        await gateway.status()
+
+
+async def test_gateway_non_ascii_text_round_trips_through_the_json_body() -> None:
+    text = "Selamat pagi Bapak Ñandu 😀"
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"provider_message_id": "wamid-2"})
+
+    await make_gateway(httpx.MockTransport(handler)).send(phone=PHONE, text=text, client_ref="r")
+
+    assert json.loads(seen[0].content.decode("utf-8"))["text"] == text
+
+
+async def test_gateway_logs_without_a_phone_omit_the_phone_fragment(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="app.modules.whatsapp.gateway")
+    with pytest.raises(ProviderUnavailable):
+        await make_gateway(json_transport(503, {})).status()
+    with pytest.raises(ProviderRejected):
+        await make_gateway(json_transport(400, {})).logout()
+
+    messages = [r.getMessage() for r in caplog.records if r.name == "app.modules.whatsapp.gateway"]
+    assert messages
+    assert all("phone" not in message and "None" not in message for message in messages)
 
 
 # --- gateway: status and logout ------------------------------------------------------------
@@ -264,6 +343,16 @@ async def test_fake_provider_records_and_fails_on_demand() -> None:
     assert len(fake.sent) == 3
 
 
+async def test_fake_provider_can_reject_a_send() -> None:
+    fake = FakeProvider()
+    fake.fail_next(ProviderRejected("Permintaan ditolak gateway."))
+    with pytest.raises(ProviderRejected):
+        await fake.send(phone=PHONE, text="x", client_ref="r")
+    assert fake.sent == []
+    await fake.send(phone=PHONE, text="x", client_ref="r")
+    assert len(fake.sent) == 1
+
+
 async def test_fake_provider_fail_next_defaults_to_once() -> None:
     fake = FakeProvider()
     fake.fail_next(RuntimeError("once"))
@@ -344,6 +433,22 @@ def test_signature_is_strictly_lowercase_hex() -> None:
     assert verify_signature(secret, body, upper) is False
 
 
+@pytest.mark.parametrize(
+    ("body", "header"),
+    [
+        (b"payload", b"sha256=00"),
+        (b"payload", 123),
+        (b"payload", ["sha256=00"]),
+        ("payload", sign_body("webhook-secret", b"payload")),
+        (None, sign_body("webhook-secret", b"payload")),
+        (123, sign_body("webhook-secret", b"payload")),
+    ],
+    ids=["bytes-header", "int-header", "list-header", "str-body", "none-body", "int-body"],
+)
+def test_signature_wrong_types_are_false_and_never_raise(body: Any, header: Any) -> None:
+    assert verify_signature("webhook-secret", body, header) is False
+
+
 def test_signature_known_vector() -> None:
     # HMAC-SHA256("key", "The quick brown fox jumps over the lazy dog")
     expected = "sha256=f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
@@ -358,6 +463,14 @@ def clean_provider_cache():
     reset_provider_cache()
     yield
     reset_provider_cache()
+
+
+@pytest.mark.parametrize("run", [1, 2])
+async def test_process_wide_fake_provider_starts_empty_in_every_test(run: int) -> None:
+    provider = get_provider()
+    assert isinstance(provider, FakeProvider)
+    assert provider.sent == [], f"leaked from an earlier test (run {run})"
+    await provider.send(phone=PHONE, text="x", client_ref=f"leak-{run}")
 
 
 def test_get_provider_returns_cached_fake_by_default(clean_provider_cache: None) -> None:

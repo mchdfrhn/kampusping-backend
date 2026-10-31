@@ -12,6 +12,7 @@ from app.db.seed import seed_reference_data
 from app.db.session import get_engine, get_session_factory
 from app.main import create_app
 from app.modules.auth import service as auth_service
+from app.modules.whatsapp.deps import reset_provider_cache
 
 from .helpers import auth_headers, create_user
 
@@ -35,6 +36,15 @@ def cheap_password_hashing(production_hasher: PasswordHasher) -> Iterator[None]:
     yield
     security._hasher = production_hasher
     auth_service.DUMMY_PASSWORD_HASH = original_dummy
+
+
+@pytest.fixture(autouse=True)
+def fresh_provider() -> Iterator[None]:
+    """Forget the process-wide provider around every test so a FakeProvider's ``sent`` never
+    leaks from one test into the next."""
+    reset_provider_cache()
+    yield
+    reset_provider_cache()
 
 
 @pytest.fixture(autouse=True)

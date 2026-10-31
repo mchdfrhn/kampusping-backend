@@ -7,6 +7,10 @@ Contract (identical on the gateway side):
 - ``POST /logout`` -> 200 or 204
 All calls carry ``Authorization: Bearer <api key>``.
 
+Mapping of answers that are not 2xx: 401/403 (key rejected), 404 (other than
+``not_on_whatsapp`` on send), 429, 3xx and 5xx -> ``ProviderUnavailable``; any other 4xx
+(400, 422, ...) -> ``ProviderRejected`` (the request itself is wrong; retrying cannot help).
+
 Logging never includes message text, the API key or raw response bodies; phone numbers are
 only logged through ``mask_phone``.
 """
@@ -18,6 +22,7 @@ import httpx
 
 from app.modules.whatsapp.provider import (
     NotOnWhatsApp,
+    ProviderRejected,
     ProviderState,
     ProviderStatus,
     ProviderUnavailable,
@@ -32,6 +37,9 @@ _VALID_STATES = frozenset(get_args(ProviderState))
 _AUTH_REJECTED = "Kunci API gateway ditolak."
 _UNAVAILABLE = "Gateway WhatsApp tidak tersedia."
 _BAD_RESPONSE = "Gateway WhatsApp mengirim respons yang tidak valid."
+_REJECTED = "Permintaan ditolak gateway."
+# 4xx answers that say "not now" or "not configured" rather than "this request is wrong".
+_TRANSIENT_CLIENT_ERRORS = frozenset({401, 403, 404, 429})
 
 
 class GatewayProvider:
@@ -88,20 +96,27 @@ class GatewayProvider:
                 headers=self._headers,
                 timeout=TIMEOUT,
             )
-        except httpx.TransportError as exc:
-            # Timeouts are TransportErrors too; log only the exception type, never its text.
+        except httpx.RequestError as exc:
+            # Transport errors (timeouts, refused connections) and the other request errors
+            # (decoding, redirect loops). Log only the exception type, never its text.
             logger.warning("Gateway %s %s failed: %s", method, path, type(exc).__name__)
             raise ProviderUnavailable(_UNAVAILABLE) from None
 
 
 def _raise_for_failure(response: httpx.Response, masked_phone: str | None = None) -> None:
+    """Raise for every answer that is not 2xx (redirects are not followed, so 3xx fails too)."""
     status_code = response.status_code
+    if 200 <= status_code < 300:
+        return
+    phone = f" (phone {masked_phone})" if masked_phone else ""
     if status_code in (401, 403):
         logger.error("Gateway rejected the API key (HTTP %s)", status_code)
         raise ProviderUnavailable(_AUTH_REJECTED)
-    if status_code >= 400:
-        logger.warning("Gateway answered HTTP %s (phone %s)", status_code, masked_phone)
-        raise ProviderUnavailable(_UNAVAILABLE)
+    if 400 <= status_code < 500 and status_code not in _TRANSIENT_CLIENT_ERRORS:
+        logger.warning("Gateway rejected the request (HTTP %s)%s", status_code, phone)
+        raise ProviderRejected(_REJECTED)
+    logger.warning("Gateway answered HTTP %s%s", status_code, phone)
+    raise ProviderUnavailable(_UNAVAILABLE)
 
 
 def _json_object(response: httpx.Response) -> dict[str, Any]:
