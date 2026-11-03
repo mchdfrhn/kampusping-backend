@@ -593,3 +593,75 @@ def test_paid_via_blank_means_not_provided() -> None:
 def test_row_issue_is_a_plain_value_object() -> None:
     issue = RowIssue(row_number=2, field="nim", message="x")
     assert (issue.row_number, issue.field, issue.message) == (2, "nim", "x")
+
+
+def test_siakad_rekap_tunggakan_csv_parsing() -> None:
+    csv_text = (
+        '" Kode (-) | Angkatan (Semua) ",,,,,,,,,\n'
+        ",,,,,,,,,\n"
+        ",,,,,,,,,\n"
+        ",,,,,,,,,\n"
+        "No,PRODI,Jenis Kelas,NIM,Nama,No Hp,Tahun Akademik,Komponen Biaya,Rincian,Rekap\n"
+        "1,22201 - Teknik Sipil,Kelas Pagi,201501545,AKBAR HARYO BIMO,,2022/2023 Genap,"
+        "001 - DU,700000,700000\n"
+        "2,22201 - Teknik Sipil,Kelas Sore,201701702,Adie Jati Kusumo,085959123666,"
+        "2022/2023 Genap,001 - DU,200000,800000\n"
+        ",,,,,,2022/2023 Genap,002 - SPP,500000,\n"
+        ",,,,,,2022/2023 Genap,006 - Biaya Kegiatan Mahasiswa,100000,\n"
+        "TOTAL,,,,,,,,1500000,1500000\n"
+    )
+    sheet = parse_upload("siakad_tunggakan.csv", csv_text.encode("utf-8"))
+    assert len(sheet.rows) == 2
+    assert sheet.row_numbers == [6, 7]
+    assert sheet.rows[0][0] == "201501545"
+    assert sheet.rows[0][1] == "AKBAR HARYO BIMO"
+    assert sheet.rows[0][3] == "2015"  # cohort extracted from NIM
+    assert sheet.rows[0][5] == "TGK-201501545-20222"  # invoice code
+    assert float(sheet.rows[0][7]) == 700000.0  # amount
+    assert sheet.rows[1][0] == "201701702"
+    assert sheet.rows[1][4] == "085959123666"
+    assert sheet.rows[1][5] == "TGK-201701702-20222"
+    assert float(sheet.rows[1][7]) == 800000.0
+
+
+def test_siakad_rekap_tunggakan_xlsx_parsing() -> None:
+    rows = [
+        ["Kode (-) | Angkatan (Semua)"],
+        [None],
+        [None],
+        [None],
+        [
+            "No",
+            "PRODI",
+            "Jenis Kelas",
+            "NIM",
+            "Nama",
+            "No Hp",
+            "Tahun Akademik",
+            "Komponen Biaya",
+            "Rincian",
+            "Rekap",
+        ],
+        [
+            1,
+            "55201 - Teknik Informatika",
+            "Kelas Pagi",
+            "52022012000",
+            "SYAFITA KHAIRUNNISA",
+            "08119486477",
+            "2024/2025 Ganjil",
+            "SPP",
+            2700000,
+            2700000,
+        ],
+        ["TOTAL", None, None, None, None, None, None, None, 2700000, 2700000],
+    ]
+    sheet = parse_upload("siakad.xlsx", make_xlsx(rows))
+    assert len(sheet.rows) == 1
+    assert sheet.row_numbers == [6]
+    assert sheet.rows[0][0] == "52022012000"
+    assert sheet.rows[0][1] == "SYAFITA KHAIRUNNISA"
+    assert sheet.rows[0][3] == "2022"
+    assert sheet.rows[0][5] == "TGK-52022012000-20241"
+    assert sheet.rows[0][7] == 2700000
+    assert sheet.rows[0][9] == "belum lunas"

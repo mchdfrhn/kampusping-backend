@@ -7,8 +7,10 @@ datetimes) and are only converted during row validation. Every failure surfaces 
 
 import csv
 import io
-from collections.abc import Iterable, Iterator
+import re
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from datetime import date
 
 from openpyxl import load_workbook
 
@@ -18,6 +20,7 @@ from app.modules.imports.columns import (
     REQUIRED_FIELDS,
     normalize_header,
 )
+from app.modules.imports.validation import cell_text
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_DATA_ROWS = 20_000
@@ -44,6 +47,120 @@ class ParsedSheet:
     row_numbers: list[int]
 
 
+SIAKAD_REKAP_HEADERS = [
+    "NIM",
+    "Nama",
+    "Program Studi",
+    "Angkatan",
+    "Nomor WA",
+    "Kode Tagihan",
+    "Semester",
+    "Nominal",
+    "Jatuh Tempo",
+    "Status",
+]
+
+
+def _try_parse_siakad_rekap(records: Sequence[tuple[int, list[object]]]) -> ParsedSheet | None:
+    header_idx = -1
+    col_map: dict[str, int] = {}
+
+    for i, (_, cells) in enumerate(records[:30]):
+        if _is_blank(cells):
+            continue
+        norm_cells = [normalize_header(c) for c in cells]
+        if "nim" in norm_cells and "rekap" in norm_cells:
+            header_idx = i
+            for idx, name in enumerate(norm_cells):
+                if name == "nim":
+                    col_map["nim"] = idx
+                elif name in ("nama", "nama mahasiswa"):
+                    col_map["nama"] = idx
+                elif name in ("prodi", "program studi"):
+                    col_map["prodi"] = idx
+                elif name in ("no hp", "no wa", "telepon", "whatsapp", "nomor wa", "nomor hp"):
+                    col_map["phone"] = idx
+                elif name in ("tahun akademik", "semester"):
+                    col_map["semester"] = idx
+                elif name == "rekap":
+                    col_map["rekap"] = idx
+            break
+
+    if header_idx == -1 or "nim" not in col_map or "rekap" not in col_map:
+        return None
+
+    rows: list[list[object]] = []
+    row_numbers: list[int] = []
+    today_iso = date.today().isoformat()
+
+    nim_idx = col_map["nim"]
+    rekap_idx = col_map["rekap"]
+    nama_idx = col_map.get("nama")
+    prodi_idx = col_map.get("prodi")
+    phone_idx = col_map.get("phone")
+    sem_idx = col_map.get("semester")
+
+    for number, cells in records[header_idx + 1 :]:
+        if number > _MAX_SCANNED_RECORDS or len(rows) >= MAX_DATA_ROWS:
+            raise _too_many_rows()
+        if _is_blank(cells):
+            continue
+
+        first_text = cell_text(cells[0] if cells else "").upper()
+        if first_text == "TOTAL":
+            break
+
+        nim_val = cells[nim_idx] if nim_idx < len(cells) else None
+        rekap_val = cells[rekap_idx] if rekap_idx < len(cells) else None
+
+        if nim_val is None or rekap_val is None:
+            continue
+
+        nim = cell_text(nim_val)
+        if not nim:
+            continue
+
+        nama = cell_text(cells[nama_idx]) if nama_idx is not None and nama_idx < len(cells) else ""
+        prodi = (
+            cell_text(cells[prodi_idx]) if prodi_idx is not None and prodi_idx < len(cells) else ""
+        )
+        phone = (
+            cell_text(cells[phone_idx]) if phone_idx is not None and phone_idx < len(cells) else ""
+        )
+        ta = cell_text(cells[sem_idx]) if sem_idx is not None and sem_idx < len(cells) else ""
+
+        m_cohort = re.search(r"20\d{2}", nim)
+        cohort = m_cohort.group(0) if m_cohort else ""
+
+        m_sem = re.match(r"(\d{4})/\d{4}\s+(Ganjil|Genap)", ta, re.IGNORECASE)
+        if m_sem:
+            sem_code = m_sem.group(1) + ("1" if m_sem.group(2).lower() == "ganjil" else "2")
+        else:
+            sem_code = re.sub(r"[^a-zA-Z0-9]", "", ta) or "1"
+
+        code = f"TGK-{nim}-{sem_code}"
+
+        row = [
+            nim,
+            nama,
+            prodi,
+            cohort,
+            phone,
+            code,
+            ta,
+            rekap_val,
+            today_iso,
+            "belum lunas",
+        ]
+        rows.append(row)
+        row_numbers.append(number)
+
+    if not rows:
+        raise ImportFileError("Berkas tidak berisi baris data.")
+
+    return ParsedSheet(headers=SIAKAD_REKAP_HEADERS, rows=rows, row_numbers=row_numbers)
+
+
 def parse_upload(filename: str, content: bytes) -> ParsedSheet:
     """Parse an uploaded file by its extension; raise ``ImportFileError`` when it is unusable."""
     name = filename.strip().lower()
@@ -54,7 +171,10 @@ def parse_upload(filename: str, content: bytes) -> ParsedSheet:
     if not content.strip():
         raise ImportFileError("Berkas kosong.")
 
-    records = _csv_records(content) if name.endswith(".csv") else _xlsx_records(content)
+    records = list(_csv_records(content) if name.endswith(".csv") else _xlsx_records(content))
+    rekap_sheet = _try_parse_siakad_rekap(records)
+    if rekap_sheet is not None:
+        return rekap_sheet
     return _collect(records)
 
 
