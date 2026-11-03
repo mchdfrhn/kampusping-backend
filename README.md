@@ -66,17 +66,17 @@ Start a new module by copying `app/modules/roles/` ([guide](docs/adding-a-module
 
 ## Conventions
 
-| Topic | Rule |
-| --- | --- |
-| Errors | Always `{"error": {"code", "message", "details"}}`; raise `AppException` |
-| Success | Plain resource or `{"items", "total", "page", "page_size"}`; no wrapper |
-| Lists | `page` (1-based), `page_size` (≤ 100), `search`, `sort_by`, `sort_order` |
-| Deletes | Soft delete (`deleted_at`, `deleted_by`); repositories filter it out |
-| Audit | `created_by` / `updated_by` / `deleted_by` come from the signed-in user |
-| Timestamps | Stored and returned in UTC, timezone-aware |
-| Transactions | Services call `commit()`; repositories only `flush()` |
+| Topic          | Rule                                                                            |
+| -------------- | ------------------------------------------------------------------------------- |
+| Errors         | Always `{"error": {"code", "message", "details"}}`; raise `AppException`        |
+| Success        | Plain resource or `{"items", "total", "page", "page_size"}`; no wrapper         |
+| Lists          | `page` (1-based), `page_size` (≤ 100), `search`, `sort_by`, `sort_order`        |
+| Deletes        | Soft delete (`deleted_at`, `deleted_by`); repositories filter it out            |
+| Audit          | `created_by` / `updated_by` / `deleted_by` come from the signed-in user         |
+| Timestamps     | Stored and returned in UTC, timezone-aware                                      |
+| Transactions   | Services call `commit()`; repositories only `flush()`                           |
 | Access control | `require_permissions("resource:action")` on the server; never role ids or names |
-| Constants | Statuses in the module's `constants.py`, permissions in `core/permissions.py` |
+| Constants      | Statuses in the module's `constants.py`, permissions in `core/permissions.py`   |
 
 ## Authentication and authorization
 
@@ -97,13 +97,13 @@ route with `Depends(require_permissions(MY_PERMISSION))`.
 
 All settings are environment variables (see `.env.example`). Highlights:
 
-| Variable | Purpose |
-| --- | --- |
-| `DATABASE_ENGINE`, `DATABASE_URL` | `postgresql`, `mysql`, `singlestore` or `sqlite`; async driver required |
-| `SECRET_KEY` | JWT signing key; production requires 32+ random characters |
-| `BACKEND_CORS_ORIGINS` | Web app origin(s) allowed to call the API with credentials |
-| `COOKIE_SECURE`, `COOKIE_SAMESITE`, `COOKIE_DOMAIN` | Refresh cookie attributes |
-| `LOGIN_RATE_LIMIT`, `RATE_LIMIT_STORAGE_URI` | Login throttling; use a shared store with several workers |
+| Variable                                            | Purpose                                                                 |
+| --------------------------------------------------- | ----------------------------------------------------------------------- |
+| `DATABASE_ENGINE`, `DATABASE_URL`                   | `postgresql`, `mysql`, `singlestore` or `sqlite`; async driver required |
+| `SECRET_KEY`                                        | JWT signing key; production requires 32+ random characters              |
+| `BACKEND_CORS_ORIGINS`                              | Web app origin(s) allowed to call the API with credentials              |
+| `COOKIE_SECURE`, `COOKIE_SAMESITE`, `COOKIE_DOMAIN` | Refresh cookie attributes                                               |
+| `LOGIN_RATE_LIMIT`, `RATE_LIMIT_STORAGE_URI`        | Login throttling; use a shared store with several workers               |
 
 With `APP_ENV=production` the app refuses to start on an unsafe configuration (weak secret,
 debug on, insecure cookie, SQLite) and disables `/docs`.

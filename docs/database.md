@@ -2,12 +2,12 @@
 
 ## Engines
 
-| `DATABASE_ENGINE` | URL scheme | Notes |
-| --- | --- | --- |
-| `postgresql` (default) | `postgresql+asyncpg://` | Recommended |
-| `mysql` | `mysql+asyncmy://` | `pip install asyncmy` |
-| `singlestore` | `mysql+asyncmy://` | MySQL wire protocol; see below |
-| `sqlite` | `sqlite+aiosqlite://` | Local tries and tests only; refused in production |
+| `DATABASE_ENGINE`      | URL scheme              | Notes                                             |
+| ---------------------- | ----------------------- | ------------------------------------------------- |
+| `postgresql` (default) | `postgresql+asyncpg://` | Recommended                                       |
+| `mysql`                | `mysql+asyncmy://`      | `pip install asyncmy`                             |
+| `singlestore`          | `mysql+asyncmy://`      | MySQL wire protocol; see below                    |
+| `sqlite`               | `sqlite+aiosqlite://`   | Local tries and tests only; refused in production |
 
 ## Tables
 

@@ -20,17 +20,17 @@ A web client keeps the access token **in memory only**. After a page reload it c
 
 ## Security properties
 
-| Threat | Mitigation |
-| --- | --- |
-| Stored credential leak | Argon2id hashes; refresh tokens stored as SHA-256 hashes |
-| Token theft from JS | Refresh token is `HttpOnly`; access token lives in memory, 15 min |
-| Stolen refresh token | Rotation on every use; replaying a rotated token revokes the whole family |
-| CSRF on cookie endpoints | `SameSite` cookie scoped to `/auth` plus a required `X-Requested-With` header (forces a CORS preflight) |
-| Brute force | Per-IP login rate limit and per-account lockout (5 failures, 15 minutes) |
-| Account enumeration | One error message for unknown email, wrong password, inactive and locked accounts; an Argon2 verification runs even for unknown emails |
-| Stale permissions | Permissions are read from the database on every request, never from the token |
-| Forged tokens | Algorithm pinned, `exp`/`iat`/`sub`/`type` required, `alg: none` rejected |
-| Weak deployment | Production refuses weak `SECRET_KEY`, insecure cookies, debug and SQLite |
+| Threat                   | Mitigation                                                                                                                             |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Stored credential leak   | Argon2id hashes; refresh tokens stored as SHA-256 hashes                                                                               |
+| Token theft from JS      | Refresh token is `HttpOnly`; access token lives in memory, 15 min                                                                      |
+| Stolen refresh token     | Rotation on every use; replaying a rotated token revokes the whole family                                                              |
+| CSRF on cookie endpoints | `SameSite` cookie scoped to `/auth` plus a required `X-Requested-With` header (forces a CORS preflight)                                |
+| Brute force              | Per-IP login rate limit and per-account lockout (5 failures, 15 minutes)                                                               |
+| Account enumeration      | One error message for unknown email, wrong password, inactive and locked accounts; an Argon2 verification runs even for unknown emails |
+| Stale permissions        | Permissions are read from the database on every request, never from the token                                                          |
+| Forged tokens            | Algorithm pinned, `exp`/`iat`/`sub`/`type` required, `alg: none` rejected                                                              |
+| Weak deployment          | Production refuses weak `SECRET_KEY`, insecure cookies, debug and SQLite                                                               |
 
 Changing a password, deactivating or deleting a user revokes all of that user's refresh tokens.
 Existing access tokens stop working immediately for deactivated or deleted users (the user is
