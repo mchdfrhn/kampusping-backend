@@ -3,6 +3,7 @@ TEMPLATE_BODY_MAX_LENGTH = 2000
 
 DEFAULT_REMINDER_TEMPLATE_NAME = "Pengingat sebelum jatuh tempo"
 DEFAULT_ARREARS_TEMPLATE_NAME = "Tunggakan setelah jatuh tempo"
+DEFAULT_ROUTINE_TEMPLATE_NAME = "Penagihan rutin"
 
 AUDIT_TEMPLATE_CREATED = "template.created"
 AUDIT_TEMPLATE_UPDATED = "template.updated"

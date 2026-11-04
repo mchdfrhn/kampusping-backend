@@ -16,6 +16,7 @@ from app.modules.templates.rendering import (
     ALLOWED_VARIABLES,
     MONTH_NAMES_ID,
     OPT_OUT_FOOTER,
+    SAMPLE_CONTEXT,
     build_message_body,
     format_date_id,
     format_rupiah,
@@ -631,11 +632,12 @@ async def test_seed_creates_defaults_once_and_never_overwrites_edits(
         assert await seed_default_templates_and_rules(db) is True
 
     templates = (await client.get(TEMPLATES_URL, headers=staf_headers)).json()["items"]
-    assert [row["name"] for row in templates] == [
+    assert [row["name"] for row in templates] == [  # the API lists by name
+        "Penagihan rutin",
         "Pengingat sebelum jatuh tempo",
         "Tunggakan setelah jatuh tempo",
     ]
-    reminder, arrears = templates
+    routine, reminder, arrears = templates
     assert (
         "Pembayaran dapat dilakukan melalui {{cara_bayar}}: {{link_pembayaran}}" in reminder["body"]
     )
@@ -643,6 +645,10 @@ async def test_seed_creates_defaults_once_and_never_overwrites_edits(
         "Mohon segera melakukan pembayaran melalui {{cara_bayar}}: {{link_pembayaran}}"
         in (arrears["body"])
     )
+    # The routine template is not tied to the due date, so it must not claim either side of it.
+    assert "akan jatuh tempo" not in routine["body"]
+    assert "melewati" not in routine["body"]
+    assert "{{" not in render_body(routine["body"], SAMPLE_CONTEXT)
     for row in templates:
         assert "SIAKAD" not in row["body"]
         assert OPT_OUT_FOOTER not in row["body"]
@@ -657,7 +663,7 @@ async def test_seed_creates_defaults_once_and_never_overwrites_edits(
         ("H", 0, reminder["name"]),
         ("H+3", 3, arrears["name"]),
         ("H+7", 7, arrears["name"]),
-    ]
+    ]  # no rule uses the routine template yet: it serves manual sending
 
     # Staff edit a template and a rule, delete another rule; reseeding must not touch anything.
     await client.put(
@@ -672,6 +678,7 @@ async def test_seed_creates_defaults_once_and_never_overwrites_edits(
 
     templates_after = (await client.get(TEMPLATES_URL, headers=staf_headers)).json()["items"]
     assert sorted(row["name"] for row in templates_after) == [
+        "Penagihan rutin",
         "Pengingat saya",
         "Tunggakan setelah jatuh tempo",
     ]

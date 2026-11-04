@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.schedules.model import ScheduleRule
 
-from .constants import DEFAULT_ARREARS_TEMPLATE_NAME, DEFAULT_REMINDER_TEMPLATE_NAME
+from .constants import (
+    DEFAULT_ARREARS_TEMPLATE_NAME,
+    DEFAULT_REMINDER_TEMPLATE_NAME,
+    DEFAULT_ROUTINE_TEMPLATE_NAME,
+)
 from .model import MessageTemplate
 
 SEED_ACTOR = "system"
@@ -46,6 +50,26 @@ ARREARS_BODY = (
     "Bagian Keuangan {{nama_kampus}}"
 )
 
+# Regular (periodic) billing: not tied to the due date, so the wording claims neither "will be
+# due" nor "is overdue". No default rule uses it; staff send it manually or attach a rule later.
+ROUTINE_BODY = (
+    "Selamat siang, {{nama}} (NIM {{nim}}).\n"
+    "\n"
+    "Berikut informasi tagihan uang kuliah Anda yang menurut data kami belum lunas:\n"
+    "\n"
+    "Semester: {{semester}}\n"
+    "Nominal: Rp{{nominal}}\n"
+    "Jatuh tempo: {{tanggal_jatuh_tempo}}\n"
+    "\n"
+    "Pembayaran dapat dilakukan melalui {{cara_bayar}}: {{link_pembayaran}}\n"
+    "\n"
+    "Bila sudah membayar, abaikan pesan ini. Bila ada kendala atau ingin berdiskusi, silakan "
+    "hubungi Bagian Keuangan di {{kontak_keuangan}}.\n"
+    "\n"
+    "Terima kasih.\n"
+    "Bagian Keuangan {{nama_kampus}}"
+)
+
 # (rule name, days from the due date, uses the reminder template?)
 DEFAULT_RULES: tuple[tuple[str, int, bool], ...] = (
     ("H-7", -7, True),
@@ -58,7 +82,7 @@ DEFAULT_RULES: tuple[tuple[str, int, bool], ...] = (
 
 
 async def seed_default_templates_and_rules(db: AsyncSession) -> bool:
-    """Create the two BRD templates and six standard rules when no template exists at all.
+    """Create the three default templates and six standard rules when no template exists at all.
 
     Soft-deleted templates count as existing, so staff who removed the defaults do not get them
     back. Existing rows are never changed. Returns whether anything was created.
@@ -81,7 +105,14 @@ async def seed_default_templates_and_rules(db: AsyncSession) -> bool:
         created_by=SEED_ACTOR,
         updated_by=SEED_ACTOR,
     )
-    db.add_all([reminder, arrears])
+    routine = MessageTemplate(
+        name=DEFAULT_ROUTINE_TEMPLATE_NAME,
+        body=ROUTINE_BODY,
+        is_active=True,
+        created_by=SEED_ACTOR,
+        updated_by=SEED_ACTOR,
+    )
+    db.add_all([reminder, arrears, routine])
     await db.flush()
 
     for name, offset_days, before_due in DEFAULT_RULES:
