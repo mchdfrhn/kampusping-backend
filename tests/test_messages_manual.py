@@ -229,6 +229,7 @@ async def test_manual_send_queues_messages_and_records_audit(
     assert len(events) >= 1
     event = next(e for e in events if e.entity_id == batch_ref)
     assert event.actor == "staf@example.com"
+    assert event.detail is not None
     assert event.detail["queued_count"] == 1
 
 
@@ -267,3 +268,135 @@ async def test_manual_send_forbidden_for_pimpinan(
         json={"template_id": tpl_id},
     )
     assert resp.status_code == 403
+
+
+# --- eligibility must match the sender's re-check ------------------------------------------------
+
+
+async def add_invoice(number: int, student_fields: dict | None = None, **invoice_fields) -> int:
+    """One unpaid invoice of a student with a valid phone; returns the invoice id."""
+    async with get_session_factory()() as db:
+        student = Student(
+            nim=f"2024{number:04d}",
+            name=f"Mahasiswa {number}",
+            study_program="Teknik Sipil",
+            cohort="2024",
+            phone=FULL_PHONE,
+            phone_status="valid",
+            **(student_fields or {}),
+        )
+        db.add(student)
+        await db.flush()
+        invoice = Invoice(
+            invoice_code=f"INV-2024-{number:03d}",
+            student_id=student.id,
+            semester="Ganjil 2026/2027",
+            amount=2_000_000,
+            due_date=date(2026, 11, 20),
+            status="unpaid",
+            source="siakad",
+            **invoice_fields,
+        )
+        db.add(invoice)
+        await db.commit()
+        return invoice.id
+
+
+async def queued_manual_count() -> int:
+    async with get_session_factory()() as db:
+        return len((await db.scalars(select(Message).where(Message.kind == "manual"))).all())
+
+
+async def test_manual_ignores_deleted_invoices_and_students(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    deleted_at = datetime(2026, 11, 1, 10, 0, tzinfo=UTC)
+    live = await add_invoice(1)
+    deleted_invoice = await add_invoice(2, deleted_at=deleted_at)
+    deleted_student = await add_invoice(3, student_fields={"deleted_at": deleted_at})
+    tpl_id = await create_template()
+    body = {"template_id": tpl_id, "invoice_ids": [live, deleted_invoice, deleted_student]}
+
+    preview = (await client.post(MANUAL_PREVIEW_URL, headers=staf_headers, json=body)).json()
+    assert preview["total_matched"] == 1
+    assert [item["invoice_id"] for item in preview["items"]] == [live]
+
+    sent = (await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)).json()
+    assert sent["total_matched"] == 1
+    assert sent["queued_count"] == 1
+    assert await queued_manual_count() == 1
+
+
+async def test_manual_excludes_an_exemption_without_an_end_date(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    # The sender cancels it (AB-05), so the preview must not call it eligible.
+    invoice_id = await add_invoice(1, exempt_reason="Cicilan", exempt_until=None)
+    tpl_id = await create_template()
+    body = {"template_id": tpl_id, "invoice_ids": [invoice_id]}
+
+    preview = (await client.post(MANUAL_PREVIEW_URL, headers=staf_headers, json=body)).json()
+    assert preview["eligible_count"] == 0
+    assert preview["excluded_breakdown"]["exempt"] == 1
+    assert (await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)).status_code == 400
+    assert await queued_manual_count() == 0
+
+
+async def test_manual_allows_an_exemption_that_has_ended(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    invoice_id = await add_invoice(1, exempt_reason="Keringanan", exempt_until=date(2020, 1, 1))
+    tpl_id = await create_template()
+
+    preview = (
+        await client.post(
+            MANUAL_PREVIEW_URL,
+            headers=staf_headers,
+            json={"template_id": tpl_id, "invoice_ids": [invoice_id]},
+        )
+    ).json()
+    assert preview["eligible_count"] == 1
+    assert preview["excluded_breakdown"]["exempt"] == 0
+
+
+# --- no duplicate while a manual message is still waiting ----------------------------------------
+
+
+async def test_manual_send_twice_queues_only_once_while_pending(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    invoice_id = await add_invoice(1)
+    tpl_id = await create_template()
+    body = {"template_id": tpl_id, "invoice_ids": [invoice_id]}
+
+    first = await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)
+    assert first.status_code == 200
+    assert first.json()["queued_count"] == 1
+
+    second = await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)
+    assert second.status_code == 400
+    assert await queued_manual_count() == 1
+
+    preview = (await client.post(MANUAL_PREVIEW_URL, headers=staf_headers, json=body)).json()
+    assert preview["eligible_count"] == 0
+    assert preview["excluded_breakdown"]["already_queued"] == 1
+    assert preview["items"][0]["exclude_reason"] == "Sudah dalam antrean"
+
+
+async def test_manual_send_again_is_allowed_once_the_first_one_went_out(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    invoice_id = await add_invoice(1)
+    tpl_id = await create_template()
+    body = {"template_id": tpl_id, "invoice_ids": [invoice_id]}
+    await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)
+
+    async with get_session_factory()() as db:
+        message = (await db.scalars(select(Message))).one()
+        message.status = "sent"
+        await db.commit()
+
+    again = await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)
+    assert again.status_code == 200
+    assert again.json()["queued_count"] == 1
+    assert await queued_manual_count() == 2

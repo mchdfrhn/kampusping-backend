@@ -86,6 +86,13 @@ def schedule_open(settings: SendSettings, local: datetime) -> bool:
     return settings.window_start <= local.time() < settings.window_end
 
 
+def is_exempt(invoice: Invoice, today: date) -> bool:
+    """AB-05: an exemption holds until ``exempt_until``; without an end date it holds for good."""
+    return invoice.exempt_reason is not None and (
+        invoice.exempt_until is None or invoice.exempt_until >= today
+    )
+
+
 async def recheck(db: AsyncSession, message: Message, *, today: date) -> Verdict | None:
     """FR-06: re-load invoice and student and decide whether the message may still go out."""
     invoice = await db.scalar(
@@ -110,9 +117,7 @@ async def recheck(db: AsyncSession, message: Message, *, today: date) -> Verdict
         return Verdict("cancelled", CancelReason.PAID.value)
     if student.opted_out_at is not None:
         return Verdict("cancelled", CancelReason.OPTED_OUT.value)
-    if invoice.exempt_reason is not None and (
-        invoice.exempt_until is None or invoice.exempt_until >= today
-    ):
+    if is_exempt(invoice, today):
         return Verdict("cancelled", CancelReason.EXEMPT.value)
     if student.phone_status != PhoneStatus.VALID.value or not student.phone:
         return Verdict("cancelled", CancelReason.PHONE_INVALID.value)

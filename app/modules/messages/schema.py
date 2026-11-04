@@ -81,6 +81,7 @@ class ExcludedBreakdown(BaseModel):
     opted_out: int = 0
     exempt: int = 0
     invalid_phone: int = 0
+    already_queued: int = 0
 
 
 class SamplePreview(BaseModel):

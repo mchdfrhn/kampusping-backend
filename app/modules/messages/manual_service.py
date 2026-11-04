@@ -23,6 +23,7 @@ from app.modules.messages.schema import (
     ManualRecipientItem,
     SamplePreview,
 )
+from app.modules.messages.send_rules import is_exempt
 from app.modules.settings.service import SettingsService
 from app.modules.students.constants import PhoneStatus
 from app.modules.students.model import Student
@@ -73,7 +74,12 @@ class ManualMessageService:
         return template
 
     def _build_invoices_query(self, req: ManualMessagePreviewRequest | ManualMessageSendRequest):
-        stmt = select(Invoice).join(Invoice.student).options(selectinload(Invoice.student))
+        stmt = (
+            select(Invoice)
+            .join(Invoice.student)
+            .options(selectinload(Invoice.student))
+            .where(Invoice.deleted_at.is_(None), Student.deleted_at.is_(None))
+        )
 
         if req.cohort:
             stmt = stmt.where(Student.cohort == req.cohort)
@@ -105,18 +111,36 @@ class ManualMessageService:
 
         return stmt.order_by(Invoice.due_date.asc(), Student.nim.asc())
 
+    async def _pending_invoice_ids(self) -> set[int]:
+        """Invoices that already have a manual message waiting to go out (queued or sending)."""
+        rows = await self.db.scalars(
+            select(Message.invoice_id).where(
+                Message.kind == MessageKind.MANUAL.value,
+                Message.status.in_((MessageStatus.QUEUED.value, MessageStatus.SENDING.value)),
+                Message.deleted_at.is_(None),
+            )
+        )
+        return set(rows)
+
     def _check_eligibility(
-        self, invoice: Invoice, today: date
+        self, invoice: Invoice, today: date, pending_invoice_ids: set[int]
     ) -> tuple[bool, str | None, str | None]:
-        """Returns (is_eligible, exclude_reason, breakdown_category)."""
+        """Returns (is_eligible, exclude_reason, breakdown_category).
+
+        Mirrors the sender's re-check (``send_rules.recheck``) so the preview never promises
+        a message the sender would cancel; the queue check keeps a double submit from
+        duplicating a message that has not gone out yet.
+        """
         if invoice.status == InvoiceStatus.PAID.value:
             return False, "Sudah lunas", "paid"
         if invoice.student.opted_out_at is not None:
             return False, "Mahasiswa opt-out", "opted_out"
-        if invoice.exempt_until is not None and invoice.exempt_until >= today:
+        if is_exempt(invoice, today):
             return False, "Dispensasi aktif", "exempt"
         if not invoice.student.phone or invoice.student.phone_status != PhoneStatus.VALID.value:
             return False, "Nomor WhatsApp tidak valid atau kosong", "invalid_phone"
+        if invoice.id in pending_invoice_ids:
+            return False, "Sudah dalam antrean", "already_queued"
         return True, None, None
 
     async def preview(self, req: ManualMessagePreviewRequest) -> ManualMessagePreviewRead:
@@ -127,6 +151,7 @@ class ManualMessageService:
 
         stmt = self._build_invoices_query(req)
         invoices = list((await self.db.scalars(stmt)).all())
+        pending = await self._pending_invoice_ids()
 
         breakdown = ExcludedBreakdown()
         items: list[ManualRecipientItem] = []
@@ -135,7 +160,7 @@ class ManualMessageService:
         excluded_count = 0
 
         for invoice in invoices:
-            is_eligible, exclude_reason, category = self._check_eligibility(invoice, today)
+            is_eligible, exclude_reason, category = self._check_eligibility(invoice, today, pending)
 
             if is_eligible:
                 eligible_count += 1
@@ -161,6 +186,8 @@ class ManualMessageService:
                     breakdown.exempt += 1
                 elif category == "invalid_phone":
                     breakdown.invalid_phone += 1
+                elif category == "already_queued":
+                    breakdown.already_queued += 1
 
             items.append(
                 ManualRecipientItem(
@@ -198,12 +225,13 @@ class ManualMessageService:
 
         stmt = self._build_invoices_query(req)
         invoices = list((await self.db.scalars(stmt)).all())
+        pending = await self._pending_invoice_ids()
 
         eligible_invoices: list[Invoice] = []
         excluded_count = 0
 
         for invoice in invoices:
-            is_eligible, _, _ = self._check_eligibility(invoice, today)
+            is_eligible, _, _ = self._check_eligibility(invoice, today, pending)
             if is_eligible:
                 eligible_invoices.append(invoice)
             else:
@@ -217,7 +245,7 @@ class ManualMessageService:
             )
 
         batch_ref = f"MANUAL-{today.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
-        actor_name = actor.email or actor.name or "system"
+        actor_name = actor.email  # not nullable; the audit entry below uses it too
 
         for invoice in eligible_invoices:
             rendered_body = build_message_body(
