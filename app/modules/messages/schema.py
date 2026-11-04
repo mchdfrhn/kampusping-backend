@@ -57,3 +57,82 @@ class MessageRead(BaseModel):
 
 
 ReceiptState = Literal["delivered", "read", "failed"]
+
+
+class ManualRecipientItem(BaseModel):
+    invoice_id: int
+    invoice_code: str
+    student_id: int
+    student_name: str
+    nim: str
+    phone_masked: str | None
+    study_program: str | None
+    cohort: str | None
+    semester: str
+    amount: int
+    due_date: date
+    invoice_status: str
+    is_eligible: bool
+    exclude_reason: str | None
+
+
+class ExcludedBreakdown(BaseModel):
+    paid: int = 0
+    opted_out: int = 0
+    exempt: int = 0
+    invalid_phone: int = 0
+
+
+class SamplePreview(BaseModel):
+    student_name: str
+    nim: str
+    phone_masked: str | None
+    invoice_code: str
+    amount: int
+    body: str
+
+
+class ManualMessagePreviewRequest(BaseModel):
+    template_id: int
+    cohort: str | None = None
+    study_program: str | None = None
+    semester: str | None = None
+    amount_min: int | None = None
+    amount_max: int | None = None
+    status: str | None = None
+    search: str | None = None
+    invoice_ids: list[int] | None = None
+
+
+class ManualMessagePreviewRead(BaseModel):
+    total_matched: int
+    eligible_count: int
+    excluded_count: int
+    excluded_breakdown: ExcludedBreakdown
+    sample_preview: SamplePreview | None
+    items: list[ManualRecipientItem]
+
+
+class ManualMessageSendRequest(BaseModel):
+    template_id: int
+    cohort: str | None = None
+    study_program: str | None = None
+    semester: str | None = None
+    amount_min: int | None = None
+    amount_max: int | None = None
+    status: str | None = None
+    search: str | None = None
+    invoice_ids: list[int] | None = None
+
+
+class ManualMessageSendRead(BaseModel):
+    batch_ref: str
+    queued_count: int
+    excluded_count: int
+    total_matched: int
+
+
+class ManualFilterOptionsRead(BaseModel):
+    cohorts: list[str]
+    study_programs: list[str]
+    semesters: list[str]

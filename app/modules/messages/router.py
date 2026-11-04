@@ -4,17 +4,26 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import ClockDep, DbSession, require_permissions
-from app.core.permissions import MESSAGES_CANCEL, MESSAGES_READ
+from app.core.permissions import MESSAGES_CANCEL, MESSAGES_READ, MESSAGES_SEND
 from app.modules.users.model import User
 from app.shared.pagination import ListQuery, Page
 
 from .constants import MessageStatus
-from .schema import MessageRead
+from .manual_service import ManualMessageService
+from .schema import (
+    ManualFilterOptionsRead,
+    ManualMessagePreviewRead,
+    ManualMessagePreviewRequest,
+    ManualMessageSendRead,
+    ManualMessageSendRequest,
+    MessageRead,
+)
 from .service import MessageService
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
 
 CanRead = Annotated[User, Depends(require_permissions(MESSAGES_READ))]
+CanSend = Annotated[User, Depends(require_permissions(MESSAGES_SEND))]
 CanCancel = Annotated[User, Depends(require_permissions(MESSAGES_CANCEL))]
 
 
@@ -43,6 +52,37 @@ async def list_messages(
         page=params.page,
         page_size=params.page_size,
     )
+
+
+@router.get(
+    "/manual/options",
+    response_model=ManualFilterOptionsRead,
+    summary="Get filter options for manual sending",
+)
+async def get_manual_options(db: DbSession, _: CanSend) -> ManualFilterOptionsRead:
+    return await ManualMessageService(db).get_filter_options()
+
+
+@router.post(
+    "/manual/preview",
+    response_model=ManualMessagePreviewRead,
+    summary="Preview recipients and exclusions for manual message sending",
+)
+async def preview_manual_messages(
+    payload: ManualMessagePreviewRequest, db: DbSession, _: CanSend, clock: ClockDep
+) -> ManualMessagePreviewRead:
+    return await ManualMessageService(db, clock).preview(payload)
+
+
+@router.post(
+    "/manual/send",
+    response_model=ManualMessageSendRead,
+    summary="Queue manual messages for eligible recipients",
+)
+async def send_manual_messages(
+    payload: ManualMessageSendRequest, db: DbSession, actor: CanSend, clock: ClockDep
+) -> ManualMessageSendRead:
+    return await ManualMessageService(db, clock).send(payload, actor)
 
 
 @router.get("/{message_id}", response_model=MessageRead, summary="Get one message")

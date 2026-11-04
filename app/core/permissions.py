@@ -52,6 +52,7 @@ SCHEDULES_UPDATE = "schedules:update"
 SCHEDULES_DELETE = "schedules:delete"
 
 MESSAGES_READ = "messages:read"
+MESSAGES_SEND = "messages:send"
 MESSAGES_CANCEL = "messages:cancel"
 
 SETTINGS_READ = "settings:read"
@@ -84,6 +85,7 @@ PERMISSIONS: tuple[PermissionDef, ...] = (
     PermissionDef(SCHEDULES_UPDATE, "Mengubah jadwal pengingat"),
     PermissionDef(SCHEDULES_DELETE, "Menghapus jadwal pengingat"),
     PermissionDef(MESSAGES_READ, "Melihat riwayat pesan"),
+    PermissionDef(MESSAGES_SEND, "Mengirim pesan manual"),
     PermissionDef(MESSAGES_CANCEL, "Membatalkan pesan terjadwal"),
     PermissionDef(SETTINGS_READ, "Melihat pengaturan"),
     PermissionDef(SETTINGS_UPDATE, "Mengubah pengaturan"),
