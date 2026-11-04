@@ -617,11 +617,11 @@ def test_siakad_rekap_tunggakan_csv_parsing() -> None:
     assert sheet.rows[0][1] == "AKBAR HARYO BIMO"
     assert sheet.rows[0][3] == "2015"  # cohort extracted from NIM
     assert sheet.rows[0][5] == "TGK-201501545-20222"  # invoice code
-    assert float(sheet.rows[0][7]) == 700000.0  # amount
+    assert float(str(sheet.rows[0][7])) == 700000.0  # amount
     assert sheet.rows[1][0] == "201701702"
     assert sheet.rows[1][4] == "085959123666"
     assert sheet.rows[1][5] == "TGK-201701702-20222"
-    assert float(sheet.rows[1][7]) == 800000.0
+    assert float(str(sheet.rows[1][7])) == 800000.0
 
 
 def test_siakad_rekap_tunggakan_xlsx_parsing() -> None:
