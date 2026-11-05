@@ -84,6 +84,12 @@ class ReportData(BaseModel):
     groups: list[GroupRow]
     arrears: list[ArrearsRow]
 
+    def to_preview(self) -> "ReportPreview":
+        """The same report without the arrears rows (and so without any personal data)."""
+        return ReportPreview(
+            **self.model_dump(exclude={"arrears"}), arrears_count=len(self.arrears)
+        )
+
 
 class ReportPreview(BaseModel):
     """What the screen shows: ``ReportData`` without the arrears rows, only their count."""

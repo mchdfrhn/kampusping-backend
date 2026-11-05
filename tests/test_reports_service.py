@@ -6,104 +6,15 @@ import pytest
 
 from app.core.exceptions import AppException
 from app.db.session import get_session_factory
-from app.modules.invoices.model import Invoice
-from app.modules.messages.model import Message
 from app.modules.reports.constants import ReportPreset
 from app.modules.reports.schema import ReportData
 from app.modules.reports.service import ReportService
-from app.modules.students.model import Student
 
-NOW = datetime(2026, 11, 2, 3, 0, tzinfo=UTC)  # 10:00 WIB, so "today" is 2026-11-02
-TODAY = date(2026, 11, 2)
+from .reports_helpers import NOW, TODAY, add_invoice, add_message, add_student, at
+
 SEM_A = "Ganjil 2026/2027"
 SEM_B = "Genap 2026/2027"
 ACTOR = "staf@example.com"
-
-
-async def add_student(
-    nim: str,
-    *,
-    name: str = "Budi Santoso",
-    program: str | None = "Teknik Informatika",
-    cohort: str | None = "2022",
-    deleted: bool = False,
-) -> int:
-    async with get_session_factory()() as db:
-        student = Student(
-            nim=nim,
-            name=name,
-            study_program=program,
-            cohort=cohort,
-            phone="+6281234567890",
-            phone_status="valid",
-            deleted_at=NOW if deleted else None,
-        )
-        db.add(student)
-        await db.commit()
-        return student.id
-
-
-async def add_invoice(
-    student_id: int,
-    code: str,
-    *,
-    semester: str = SEM_A,
-    amount: int = 1_000_000,
-    due: date = TODAY + timedelta(days=5),
-    status: str = "unpaid",
-    paid_at: date | None = None,
-    exempt_reason: str | None = None,
-    exempt_until: date | None = None,
-    deleted: bool = False,
-) -> int:
-    async with get_session_factory()() as db:
-        invoice = Invoice(
-            invoice_code=code,
-            student_id=student_id,
-            semester=semester,
-            amount=amount,
-            due_date=due,
-            status=status,
-            paid_at=paid_at,
-            source="siakad",
-            exempt_reason=exempt_reason,
-            exempt_until=exempt_until,
-            deleted_at=NOW if deleted else None,
-        )
-        db.add(invoice)
-        await db.commit()
-        return invoice.id
-
-
-async def add_message(
-    student_id: int,
-    invoice_id: int,
-    *,
-    status: str = "sent",
-    scheduled: date = TODAY,
-    sent_at: datetime | None = None,
-    deleted: bool = False,
-) -> int:
-    async with get_session_factory()() as db:
-        message = Message(
-            student_id=student_id,
-            invoice_id=invoice_id,
-            kind="manual",
-            scheduled_date=scheduled,
-            body="Pesan uji",
-            status=status,
-            queued_at=NOW,
-            sent_at=sent_at,
-            deleted_at=NOW if deleted else None,
-        )
-        db.add(message)
-        await db.commit()
-        return message.id
-
-
-def at(year: int, month: int, day: int, hour: int = 5) -> datetime:
-    """A UTC instant; 05:00 UTC is 12:00 in Jakarta, the same calendar day."""
-    return datetime(year, month, day, hour, 0, tzinfo=UTC)
 
 
 async def build(

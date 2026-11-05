@@ -6,6 +6,7 @@ from app.modules.dashboard.router import router as dashboard_router
 from app.modules.imports.router import router as imports_router
 from app.modules.invoices.router import router as invoices_router
 from app.modules.messages.router import router as messages_router
+from app.modules.reports.router import router as reports_router
 from app.modules.roles.router import router as roles_router
 from app.modules.schedules.router import router as schedules_router
 from app.modules.settings.router import router as settings_router
@@ -31,5 +32,6 @@ router.include_router(webhook_router)
 router.include_router(settings_router)
 router.include_router(audit_router)
 router.include_router(dashboard_router)
+router.include_router(reports_router)
 
 __all__ = ["router"]
