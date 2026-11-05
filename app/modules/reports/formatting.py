@@ -35,3 +35,29 @@ def format_period(data: ReportData) -> str:
 def format_generated(data: ReportData) -> str:
     moment = local_now(data.generated_at, settings.app_timezone)
     return f"{moment:%d-%m-%Y %H:%M %Z} oleh {data.generated_by}"
+
+
+GROUP_HEADERS = (
+    "Prodi",
+    "Angkatan",
+    "Jumlah Tagihan",
+    "Lunas",
+    "Belum Lunas",
+    "Lewat Jatuh Tempo",
+    "Nominal Tunggakan",
+    "% Lunas",
+)
+ARREARS_HEADERS = (
+    "NIM",
+    "Nama",
+    "Prodi",
+    "Angkatan",
+    "Semester",
+    "Kode Tagihan",
+    "Nominal",
+    "Jatuh Tempo",
+    "Hari Terlambat",
+    "Pesan Terkirim",
+    "Pesan Terakhir (Tanggal)",
+    "Pesan Terakhir (Status)",
+)

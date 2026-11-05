@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .constants import MESSAGE_STATUS_LABELS, ReportPreset
-from .formatting import format_generated, format_period
+from .formatting import ARREARS_HEADERS, GROUP_HEADERS, format_generated, format_period
 from .schema import ReportData
 
 RUPIAH_FORMAT = '"Rp"#,##0'
@@ -18,31 +18,7 @@ DATE_FORMAT = "dd-mm-yyyy"
 PERCENT_FORMAT = '0.0"%"'
 HEADER_FILL = PatternFill("solid", fgColor="E2E8F0")
 
-GROUP_HEADERS = (
-    "Prodi",
-    "Angkatan",
-    "Jumlah Tagihan",
-    "Lunas",
-    "Belum Lunas",
-    "Lewat Jatuh Tempo",
-    "Nominal Tunggakan",
-    "% Lunas",
-)
 GROUP_WIDTHS = (28, 12, 16, 10, 14, 18, 20, 10)
-ARREARS_HEADERS = (
-    "NIM",
-    "Nama",
-    "Prodi",
-    "Angkatan",
-    "Semester",
-    "Kode Tagihan",
-    "Nominal",
-    "Jatuh Tempo",
-    "Hari Terlambat",
-    "Pesan Terkirim",
-    "Pesan Terakhir (Tanggal)",
-    "Pesan Terakhir (Status)",
-)
 ARREARS_WIDTHS = (14, 30, 28, 11, 20, 18, 16, 14, 15, 15, 24, 22)
 
 
