@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import ColumnElement, and_, distinct, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,12 +9,15 @@ from app.core.exceptions import AppException
 from app.modules.invoices.constants import InvoiceStatus
 from app.modules.invoices.model import Invoice
 from app.modules.messages.constants import MessageStatus
+from app.modules.messages.model import Message
 from app.modules.students.model import Student
-from app.shared.clock import Clock, as_utc, local_today
+from app.shared.clock import Clock, as_utc, local_now, local_today
+from app.shared.utils import ensure_utc
 
 from .constants import (
     NO_COHORT_LABEL,
     NO_PROGRAM_LABEL,
+    REACHED_STATUSES,
     WEEKLY_WINDOW_DAYS,
     ReportPreset,
 )
@@ -37,6 +40,11 @@ def _percent(part: int, whole: int) -> float:
 
 def _label(value: str | None, fallback: str) -> str:
     return (value or "").strip() or fallback
+
+
+def _local_date(moment: datetime) -> date:
+    """The calendar day of a stored (UTC) timestamp in the business time zone."""
+    return local_now(ensure_utc(moment), settings.app_timezone).date()
 
 
 class ReportService:
@@ -90,8 +98,8 @@ class ReportService:
             generated_by=generated_by,
             summary=ReportSummary(
                 invoices=await self._invoice_figures(scope, today),
-                messages=self._message_figures(),
-                paid_after_message=0,
+                messages=await self._message_figures(scope_semester, period_start, period_end),
+                paid_after_message=await self._paid_after_message(scope, period_start, period_end),
                 payments_in_period=payments,
             ),
             groups=await self._groups(scope, today),
@@ -163,9 +171,53 @@ class ReportService:
             paid_percent_amount=_percent(row[3], row[1]),
         )
 
-    @staticmethod
-    def _message_figures() -> MessageFigures:
-        return MessageFigures(**{status.value: 0 for status in MessageStatus})
+    async def _message_figures(
+        self, semester: str | None, start: date | None, end: date | None
+    ) -> MessageFigures:
+        """Weekly: messages planned inside the window; semester: every message of its invoices."""
+        query = (
+            select(Message.status, func.count(Message.id))
+            .join(Invoice, Invoice.id == Message.invoice_id)
+            .join(Student, Student.id == Message.student_id)
+            .where(
+                Message.deleted_at.is_(None),
+                Invoice.deleted_at.is_(None),
+                Student.deleted_at.is_(None),
+            )
+            .group_by(Message.status)
+        )
+        if start is not None and end is not None:
+            query = query.where(Message.scheduled_date >= start, Message.scheduled_date <= end)
+        if semester is not None:
+            query = query.where(Invoice.semester == semester)
+        counts = dict((await self.db.execute(query)).tuples().all())
+        return MessageFigures(
+            **{status.value: counts.get(status.value, 0) for status in MessageStatus}
+        )
+
+    async def _paid_after_message(self, scope: Scope, start: date | None, end: date | None) -> int:
+        """Paid invoices that had a reached message on or before the payment day (Jakarta days)."""
+        query = (
+            select(Invoice.paid_at, func.min(Message.sent_at))
+            .join(Student, Student.id == Invoice.student_id)
+            .join(Message, Message.invoice_id == Invoice.id)
+            .where(
+                *scope,
+                Invoice.status == InvoiceStatus.PAID.value,
+                Invoice.paid_at.is_not(None),
+                Message.deleted_at.is_(None),
+                Message.status.in_(REACHED_STATUSES),
+                Message.sent_at.is_not(None),
+            )
+            .group_by(Invoice.id, Invoice.paid_at)
+        )
+        if start is not None and end is not None:
+            query = query.where(Invoice.paid_at >= start, Invoice.paid_at <= end)
+        return sum(
+            1
+            for paid_at, first_sent in (await self.db.execute(query)).all()
+            if _local_date(first_sent) <= paid_at
+        )
 
     async def _payments_in_period(self, scope: Scope, start: date, end: date) -> PaymentsInPeriod:
         query = (
@@ -236,6 +288,7 @@ class ReportService:
     async def _arrears(self, scope: Scope, today: date) -> list[ArrearsRow]:
         query = (
             select(
+                Invoice.id,
                 Student.nim,
                 Student.name,
                 Student.study_program,
@@ -249,10 +302,12 @@ class ReportService:
             .where(*scope, self._overdue(today))
             .order_by(Invoice.due_date.asc(), Student.nim.asc(), Invoice.invoice_code.asc())
         )
+        reached = await self._reached_messages(scope, today)
         rows = []
-        for nim, name, program, cohort, semester, code, amount, due_date in (
+        for invoice_id, nim, name, program, cohort, semester, code, amount, due_date in (
             await self.db.execute(query)
         ).all():
+            sent, last = reached.get(invoice_id, (0, None))
             rows.append(
                 ArrearsRow(
                     nim=nim,
@@ -264,9 +319,32 @@ class ReportService:
                     amount=amount,
                     due_date=due_date,
                     days_overdue=(today - due_date).days,
-                    messages_sent=0,
-                    last_message_date=None,
-                    last_message_status=None,
+                    messages_sent=sent,
+                    last_message_date=_local_date(last[0]) if last else None,
+                    last_message_status=last[1] if last else None,
                 )
             )
         return rows
+
+    async def _reached_messages(
+        self, scope: Scope, today: date
+    ) -> dict[int, tuple[int, tuple[datetime, str] | None]]:
+        """Per overdue invoice: how many reached messages and the latest one (time, status)."""
+        query = (
+            select(Message.invoice_id, Message.sent_at, Message.status)
+            .join(Invoice, Invoice.id == Message.invoice_id)
+            .join(Student, Student.id == Invoice.student_id)
+            .where(
+                *scope,
+                self._overdue(today),
+                Message.deleted_at.is_(None),
+                Message.status.in_(REACHED_STATUSES),
+                Message.sent_at.is_not(None),
+            )
+            .order_by(Message.invoice_id, Message.sent_at.asc(), Message.id.asc())
+        )
+        reached: dict[int, tuple[int, tuple[datetime, str] | None]] = {}
+        for invoice_id, sent_at, status in (await self.db.execute(query)).all():
+            count, _ = reached.get(invoice_id, (0, None))
+            reached[invoice_id] = (count + 1, (sent_at, status))  # ascending, so the last wins
+        return reached

@@ -7,6 +7,7 @@ import pytest
 from app.core.exceptions import AppException
 from app.db.session import get_session_factory
 from app.modules.invoices.model import Invoice
+from app.modules.messages.model import Message
 from app.modules.reports.constants import ReportPreset
 from app.modules.reports.schema import ReportData
 from app.modules.reports.service import ReportService
@@ -72,6 +73,37 @@ async def add_invoice(
         db.add(invoice)
         await db.commit()
         return invoice.id
+
+
+async def add_message(
+    student_id: int,
+    invoice_id: int,
+    *,
+    status: str = "sent",
+    scheduled: date = TODAY,
+    sent_at: datetime | None = None,
+    deleted: bool = False,
+) -> int:
+    async with get_session_factory()() as db:
+        message = Message(
+            student_id=student_id,
+            invoice_id=invoice_id,
+            kind="manual",
+            scheduled_date=scheduled,
+            body="Pesan uji",
+            status=status,
+            queued_at=NOW,
+            sent_at=sent_at,
+            deleted_at=NOW if deleted else None,
+        )
+        db.add(message)
+        await db.commit()
+        return message.id
+
+
+def at(year: int, month: int, day: int, hour: int = 5) -> datetime:
+    """A UTC instant; 05:00 UTC is 12:00 in Jakarta, the same calendar day."""
+    return datetime(year, month, day, hour, 0, tzinfo=UTC)
 
 
 async def build(
@@ -296,3 +328,115 @@ async def test_semesters_lists_distinct_non_empty_newest_first() -> None:
         semesters = await ReportService(db, lambda: NOW).semesters()
 
     assert semesters == ["2026/2027", "2025/2026", "2024/2025"]
+
+
+# --- messages ------------------------------------------------------------------------------
+
+
+async def test_message_counts_weekly_use_scheduled_date_window() -> None:
+    student = await add_student("2201")
+    invoice = await add_invoice(student, "I1")
+    await add_message(student, invoice, status="sent", scheduled=TODAY)
+    await add_message(student, invoice, status="sent", scheduled=TODAY - timedelta(days=6))
+    await add_message(student, invoice, status="failed", scheduled=TODAY - timedelta(days=3))
+    await add_message(student, invoice, status="queued", scheduled=TODAY + timedelta(days=0))
+    await add_message(student, invoice, status="sent", scheduled=TODAY - timedelta(days=7))
+
+    messages = (await build()).summary.messages
+
+    assert (messages.sent, messages.failed, messages.queued) == (2, 1, 1)
+    assert (messages.delivered, messages.read, messages.sending, messages.cancelled) == (0, 0, 0, 0)
+
+
+async def test_message_counts_semester_follow_the_invoice_semester() -> None:
+    student = await add_student("2201")
+    in_a = await add_invoice(student, "A1", semester=SEM_A)
+    in_b = await add_invoice(student, "B1", semester=SEM_B)
+    long_ago = TODAY - timedelta(days=90)
+    await add_message(student, in_a, status="delivered", scheduled=long_ago)
+    await add_message(student, in_b, status="read", scheduled=long_ago)
+    await add_message(student, in_b, status="read", scheduled=long_ago - timedelta(days=30))
+
+    messages = (await build(ReportPreset.SEMESTER, SEM_B)).summary.messages
+
+    assert (messages.read, messages.delivered) == (2, 0)
+
+
+async def test_deleted_messages_invoices_and_students_are_not_counted() -> None:
+    student = await add_student("2201")
+    gone_student = await add_student("2202", deleted=True)
+    live = await add_invoice(student, "LIVE")
+    gone_invoice = await add_invoice(student, "GONE", deleted=True)
+    other = await add_invoice(gone_student, "OTHER")
+    await add_message(student, live, status="sent")
+    await add_message(student, live, status="sent", deleted=True)
+    await add_message(student, gone_invoice, status="sent")
+    await add_message(gone_student, other, status="sent")
+
+    assert (await build()).summary.messages.sent == 1
+
+
+async def test_paid_after_message_counts_only_messages_on_or_before_payment_day() -> None:
+    student = await add_student("2201")
+    paid_yesterday = TODAY - timedelta(days=1)
+
+    same_day = await add_invoice(student, "SAME", status="paid", paid_at=paid_yesterday)
+    await add_message(student, same_day, status="sent", sent_at=at(2026, 11, 1))
+
+    after = await add_invoice(student, "AFTER", status="paid", paid_at=TODAY - timedelta(days=3))
+    await add_message(student, after, status="sent", sent_at=at(2026, 10, 31))
+
+    not_reached = await add_invoice(student, "NOT-REACHED", status="paid", paid_at=paid_yesterday)
+    await add_message(student, not_reached, status="queued")
+    await add_message(student, not_reached, status="failed")
+    await add_message(student, not_reached, status="sending")
+
+    earlier_and_later = await add_invoice(student, "TWO", status="paid", paid_at=paid_yesterday)
+    await add_message(student, earlier_and_later, status="delivered", sent_at=at(2026, 10, 29))
+    await add_message(student, earlier_and_later, status="read", sent_at=at(2026, 11, 2))
+
+    assert (await build()).summary.paid_after_message == 2
+
+
+async def test_paid_after_message_scope_is_the_payment_window_when_weekly() -> None:
+    student = await add_student("2201")
+    old = await add_invoice(student, "OLD", status="paid", paid_at=TODAY - timedelta(days=20))
+    await add_message(student, old, status="sent", sent_at=at(2026, 10, 1))
+
+    assert (await build()).summary.paid_after_message == 0
+    assert (await build(ReportPreset.SEMESTER, SEM_A)).summary.paid_after_message == 1
+
+
+async def test_paid_after_message_uses_the_jakarta_calendar_day() -> None:
+    student = await add_student("2201")
+    paid = date(2026, 11, 1)
+    # 18:00 UTC on 1 November is 01:00 on 2 November in Jakarta: sent after the payment day.
+    late = await add_invoice(student, "LATE", status="paid", paid_at=paid)
+    await add_message(student, late, status="sent", sent_at=at(2026, 11, 1, hour=18))
+    # 16:00 UTC on 1 November is 23:00 in Jakarta: still the payment day.
+    on_time = await add_invoice(student, "ON-TIME", status="paid", paid_at=paid)
+    await add_message(student, on_time, status="sent", sent_at=at(2026, 11, 1, hour=16))
+
+    assert (await build()).summary.paid_after_message == 1
+
+
+async def test_arrears_rows_report_messages_sent_and_last_message() -> None:
+    student = await add_student("2201")
+    with_messages = await add_invoice(student, "WITH", due=TODAY - timedelta(days=20))
+    without = await add_invoice(student, "WITHOUT", due=TODAY - timedelta(days=5))
+    await add_message(student, with_messages, status="sent", sent_at=at(2026, 10, 20))
+    await add_message(student, with_messages, status="delivered", sent_at=at(2026, 10, 25))
+    await add_message(student, with_messages, status="failed", sent_at=at(2026, 10, 30))
+    await add_message(student, with_messages, status="queued")
+    await add_message(student, with_messages, status="read", sent_at=at(2026, 10, 31), deleted=True)
+    assert without
+
+    rows = {row.invoice_code: row for row in (await build()).arrears}
+
+    with_row = rows["WITH"]
+    assert with_row.messages_sent == 2
+    assert with_row.last_message_date == date(2026, 10, 25)
+    assert with_row.last_message_status == "delivered"
+    without_row = rows["WITHOUT"]
+    assert (without_row.messages_sent, without_row.last_message_date) == (0, None)
+    assert without_row.last_message_status is None
