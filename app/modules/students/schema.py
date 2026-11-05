@@ -31,6 +31,13 @@ class StudentSummary(BaseModel):
     name: str
 
 
+class StudentFilterOptions(BaseModel):
+    """Values the student list can be filtered by, taken from the stored students."""
+
+    study_programs: list[str]
+    cohorts: list[str]
+
+
 class StudentPhoneUpdate(BaseModel):
     phone: str | None = Field(
         max_length=PHONE_INPUT_MAX_LENGTH,

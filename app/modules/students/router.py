@@ -8,7 +8,7 @@ from app.modules.users.model import User
 from app.shared.pagination import ListQuery, Page
 
 from .constants import PhoneStatus
-from .schema import StudentPhoneUpdate, StudentRead
+from .schema import StudentFilterOptions, StudentPhoneUpdate, StudentRead
 from .service import StudentService
 
 router = APIRouter(prefix="/students", tags=["Students"])
@@ -35,6 +35,15 @@ async def list_students(
         page=params.page,
         page_size=params.page_size,
     )
+
+
+@router.get(
+    "/filter-options",
+    response_model=StudentFilterOptions,
+    summary="Study programs and cohorts available as list filters",
+)
+async def get_student_filter_options(db: DbSession, _: CanRead) -> StudentFilterOptions:
+    return await StudentService(db).filter_options()
 
 
 @router.get("/{student_id}", response_model=StudentRead)

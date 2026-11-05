@@ -157,6 +157,39 @@ async def test_get_student_and_not_found(
     assert missing.status_code == 404
 
 
+async def test_students_filter_options_lists_distinct_values_sorted(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    await make_student("2201", "Budi")
+    await make_student("2202", "Siti", study_program="Akuntansi", cohort="2023")
+    await make_student("2203", "Andi", study_program="Akuntansi", cohort="2022")
+    await make_student("2204", "Tanpa Data", study_program="", cohort="")
+    gone_id = await make_student("2205", "Dihapus", study_program="Hukum", cohort="2019")
+    async with get_session_factory()() as db:
+        gone = await db.get(Student, gone_id)
+        assert gone is not None
+        gone.deleted_at = datetime(2026, 10, 1, tzinfo=UTC)
+        await db.commit()
+
+    response = await client.get(f"{STUDENTS_URL}/filter-options", headers=staf_headers)
+
+    assert response.status_code == 200
+    # distinct, no blanks, soft-deleted rows ignored; programs A-Z, cohorts newest first
+    assert response.json() == {
+        "study_programs": ["Akuntansi", "Teknik Informatika"],
+        "cohorts": ["2023", "2022"],
+    }
+
+
+async def test_students_filter_options_empty_without_students(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    response = await client.get(f"{STUDENTS_URL}/filter-options", headers=staf_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"study_programs": [], "cohorts": []}
+
+
 async def test_patch_student_phone_valid_normalises_and_audits(
     client: httpx.AsyncClient, staf_headers: dict[str, str]
 ) -> None:
@@ -475,7 +508,12 @@ async def test_invoice_code_is_unique_at_database_level() -> None:
 # --- access control ---------------------------------------------------------------------------
 
 
-READ_ENDPOINTS = [STUDENTS_URL, f"{STUDENTS_URL}/1", INVOICES_URL]
+READ_ENDPOINTS = [
+    STUDENTS_URL,
+    f"{STUDENTS_URL}/1",
+    f"{STUDENTS_URL}/filter-options",
+    INVOICES_URL,
+]
 WRITE_ENDPOINTS: list[tuple[str, dict[str, Any]]] = [
     (f"{STUDENTS_URL}/1", {"phone": "081234567890"}),
     (f"{INVOICES_URL}/1/status", {"status": "paid"}),

@@ -19,6 +19,7 @@ from .constants import (
 )
 from .model import Student
 from .repository import StudentRepository
+from .schema import StudentFilterOptions
 
 
 class StudentService:
@@ -37,6 +38,12 @@ class StudentService:
     ) -> tuple[Sequence[Student], int]:
         return await self.students.search(
             params, study_program=study_program, cohort=cohort, phone_status=phone_status
+        )
+
+    async def filter_options(self) -> StudentFilterOptions:
+        return StudentFilterOptions(
+            study_programs=await self.students.distinct_study_programs(),
+            cohorts=await self.students.distinct_cohorts(),
         )
 
     async def get(self, student_id: int) -> Student:
