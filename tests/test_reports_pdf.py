@@ -136,3 +136,9 @@ def test_summary_table_has_no_payment_window_row_for_a_semester() -> None:
     data = make_report(preset=ReportPreset.SEMESTER, semester="Ganjil 2026/2027")
 
     assert "Pembayaran dalam periode" not in {row[0] for row in summary_table(data)}
+
+
+def test_control_characters_in_imported_text_do_not_break_the_pdf() -> None:
+    rows = [make_arrears_row(name="Bu\x0bdi\x00 Santoso", invoice_code="IN\x1fV")]
+
+    assert build_pdf(make_report(arrears=rows)).startswith(b"%PDF")

@@ -8,13 +8,13 @@ from app.api.deps import ClockDep, DbSession, require_permissions
 from app.core.config import settings
 from app.core.permissions import REPORTS_EXPORT, REPORTS_READ
 from app.modules.audit.service import record_audit
-from app.modules.dashboard.constants import SEMESTER_MAX_LENGTH
 from app.modules.users.model import User
 from app.shared.clock import local_today
 
 from .constants import (
     AUDIT_ENTITY_REPORT,
     AUDIT_REPORT_EXPORTED,
+    SEMESTER_QUERY_MAX_LENGTH,
     ReportFormat,
     ReportPreset,
 )
@@ -29,7 +29,7 @@ CanRead = Annotated[User, Depends(require_permissions(REPORTS_READ))]
 CanExport = Annotated[User, Depends(require_permissions(REPORTS_EXPORT))]
 
 PresetQuery = Annotated[ReportPreset, Query(description="`weekly` or `semester`")]
-SemesterQuery = Annotated[str | None, Query(max_length=SEMESTER_MAX_LENGTH)]
+SemesterQuery = Annotated[str | None, Query(max_length=SEMESTER_QUERY_MAX_LENGTH)]
 
 MEDIA_TYPES = {
     ReportFormat.XLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -10,7 +10,13 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .constants import MESSAGE_STATUS_LABELS, ReportPreset
-from .formatting import ARREARS_HEADERS, GROUP_HEADERS, format_generated, format_period
+from .formatting import (
+    ARREARS_HEADERS,
+    GROUP_HEADERS,
+    clean_text,
+    format_generated,
+    format_period,
+)
 from .schema import ReportData
 
 RUPIAH_FORMAT = '"Rp"#,##0'
@@ -23,7 +29,7 @@ ARREARS_WIDTHS = (14, 30, 28, 11, 20, 18, 16, 14, 15, 15, 24, 22)
 
 
 def _text(sheet: Worksheet, row: int, column: int, value: str, *, bold: bool = False) -> Cell:
-    cell = sheet.cell(row=row, column=column, value=value)
+    cell = sheet.cell(row=row, column=column, value=clean_text(value))
     # openpyxl turns text that starts with "=" into a formula; names from imported files must stay
     # text, so the cell type is forced back to string.
     cell.data_type = "s"

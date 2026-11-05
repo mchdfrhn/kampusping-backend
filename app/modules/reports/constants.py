@@ -13,6 +13,10 @@ class ReportFormat(StrEnum):
     PDF = "pdf"
 
 
+# `Invoice.semester` is a String(50), and /reports/options lists every stored value, so the
+# filter must accept as many characters as that column holds.
+SEMESTER_QUERY_MAX_LENGTH = 50
+
 # The weekly window is `[today - 6, today]`, both ends included.
 WEEKLY_WINDOW_DAYS = 7
 

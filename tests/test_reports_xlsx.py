@@ -166,3 +166,15 @@ def test_no_sheet_has_a_phone_column() -> None:
     ]
 
     assert not [h for h in headers if any(w in h for w in ("hp", "wa ", "telepon", "phone"))]
+
+
+def test_control_characters_in_imported_text_are_dropped_not_fatal() -> None:
+    rows = [make_arrears_row(nim="1\x00", name="Bu\x0bdi\x1f Santoso", invoice_code="IN\x0cV")]
+
+    sheet = open_workbook(build_xlsx(make_report(arrears=rows)))["Tunggakan"]
+
+    assert [sheet.cell(row=2, column=column).value for column in (1, 2, 6)] == [
+        "1",
+        "Budi Santoso",
+        "INV",
+    ]

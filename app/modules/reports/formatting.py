@@ -1,5 +1,6 @@
 """Text shared by the Excel and PDF reports, so both say the same thing."""
 
+import re
 from datetime import date
 
 from app.core.config import settings
@@ -8,6 +9,17 @@ from app.shared.clock import local_now
 
 from .constants import WEEKLY_WINDOW_DAYS, ReportPreset
 from .schema import ReportData
+
+# Control characters other than tab and newline: a paste from a PDF or Word file can leave one in a
+# name, and openpyxl refuses to write them (the export would fail with a 500).
+_CONTROL_CHARACTERS = re.compile(
+    "[" + chr(0) + "-" + chr(8) + chr(11) + chr(12) + chr(14) + "-" + chr(31) + "]"
+)
+
+
+def clean_text(value: str) -> str:
+    """Drop the control characters a worksheet or a PDF cannot carry."""
+    return _CONTROL_CHARACTERS.sub("", value)
 
 
 def format_short_date(value: date) -> str:

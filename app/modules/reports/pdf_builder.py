@@ -18,6 +18,7 @@ from .constants import MESSAGE_STATUS_LABELS, ReportPreset
 from .formatting import (
     ARREARS_HEADERS,
     GROUP_HEADERS,
+    clean_text,
     format_generated,
     format_percent_id,
     format_period,
@@ -129,7 +130,7 @@ def arrears_table(data: ReportData) -> list[list[str]]:
 
 def _paragraph(text: str, style: ParagraphStyle) -> Paragraph:
     # Paragraph parses XML-like markup, and names come from imported files: escape everything.
-    return Paragraph(escape(text), style)
+    return Paragraph(escape(clean_text(text)), style)
 
 
 def _table(rows: Sequence[Sequence[str]], widths: Sequence[int], numeric: frozenset[int]) -> Table:

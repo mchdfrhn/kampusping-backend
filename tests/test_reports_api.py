@@ -225,7 +225,7 @@ async def test_export_writes_one_audit_event_without_personal_data(
     [
         {"preset": "semester"},
         {"preset": "bogus"},
-        {"semester": "x" * 21},
+        {"semester": "x" * 51},
     ],
 )
 async def test_invalid_preview_parameters_are_rejected(
@@ -240,7 +240,7 @@ async def test_invalid_preview_parameters_are_rejected(
         {"format": "xlsx", "preset": "semester"},
         {"format": "csv"},
         {"preset": "weekly"},
-        {"format": "pdf", "semester": "x" * 21},
+        {"format": "pdf", "semester": "x" * 51},
     ],
 )
 async def test_invalid_export_parameters_are_rejected(
@@ -262,3 +262,22 @@ async def test_options_lists_semesters_newest_first(
     response = await client.get(OPTIONS_URL, headers=staf_headers)
 
     assert response.json() == {"semesters": ["2026/2027", "2025/2026"]}
+
+
+async def test_semester_names_up_to_the_stored_length_are_accepted(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    name = (
+        "Semester Pendek Ganjil 2026/2027"  # longer than 20 characters, as stored invoices may be
+    )
+    student = await add_student("2201")
+    await add_invoice(student, "LONG", semester=name, due=TODAY - timedelta(days=2))
+    params = {"preset": "semester", "semester": name}
+
+    assert (await client.get(OPTIONS_URL, headers=staf_headers)).json() == {"semesters": [name]}
+    preview = await client.get(BILLING_URL, params=params, headers=staf_headers)
+    export = await client.get(EXPORT_URL, params={**params, "format": "pdf"}, headers=staf_headers)
+
+    assert preview.status_code == 200
+    assert preview.json()["arrears_count"] == 1
+    assert export.status_code == 200
