@@ -28,3 +28,14 @@ REACHED_STATUSES = (
     MessageStatus.DELIVERED.value,
     MessageStatus.READ.value,
 )
+
+# Same wording as the message log in the web app, in the order a reader expects.
+MESSAGE_STATUS_LABELS = {
+    MessageStatus.QUEUED.value: "Antre",
+    MessageStatus.SENDING.value: "Mengirim",
+    MessageStatus.SENT.value: "Terkirim",
+    MessageStatus.DELIVERED.value: "Diterima",
+    MessageStatus.READ.value: "Dibaca",
+    MessageStatus.FAILED.value: "Gagal",
+    MessageStatus.CANCELLED.value: "Dibatalkan",
+}
