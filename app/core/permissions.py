@@ -60,6 +60,9 @@ SETTINGS_UPDATE = "settings:update"
 
 AUDIT_READ = "audit:read"
 
+REPORTS_READ = "reports:read"
+REPORTS_EXPORT = "reports:export"
+
 PERMISSIONS: tuple[PermissionDef, ...] = (
     PermissionDef(USERS_READ, "Melihat pengguna"),
     PermissionDef(USERS_CREATE, "Menambah pengguna"),
@@ -90,6 +93,8 @@ PERMISSIONS: tuple[PermissionDef, ...] = (
     PermissionDef(SETTINGS_READ, "Melihat pengaturan"),
     PermissionDef(SETTINGS_UPDATE, "Mengubah pengaturan"),
     PermissionDef(AUDIT_READ, "Melihat jejak audit"),
+    PermissionDef(REPORTS_READ, "Melihat laporan penagihan"),
+    PermissionDef(REPORTS_EXPORT, "Mengunduh laporan penagihan (Excel/PDF)"),
 )
 
 ALL_PERMISSION_CODES: tuple[str, ...] = tuple(p.code for p in PERMISSIONS)
@@ -112,5 +117,7 @@ SYSTEM_ROLES: dict[str, RoleDef] = {
         "Mengelola impor tagihan, templat, jadwal, dan riwayat pesan",
         STAF_KEUANGAN_PERMISSION_CODES,
     ),
-    PIMPINAN_ROLE: RoleDef("Hanya melihat dasbor ringkasan", (DASHBOARD_READ,)),
+    PIMPINAN_ROLE: RoleDef(
+        "Melihat dasbor dan laporan penagihan", (DASHBOARD_READ, REPORTS_READ, REPORTS_EXPORT)
+    ),
 }

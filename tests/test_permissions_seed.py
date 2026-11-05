@@ -5,6 +5,8 @@ from app.core.permissions import (
     ALL_PERMISSION_CODES,
     DASHBOARD_READ,
     PIMPINAN_ROLE,
+    REPORTS_EXPORT,
+    REPORTS_READ,
     STAF_KEUANGAN_ROLE,
 )
 from app.db.seed import seed_reference_data
@@ -34,8 +36,16 @@ async def test_staf_keuangan_has_everything_except_users_roles_audit() -> None:
     assert codes == expected
 
 
-async def test_pimpinan_has_only_dashboard_read() -> None:
-    assert await _role_codes(PIMPINAN_ROLE) == {DASHBOARD_READ}
+async def test_pimpinan_has_dashboard_and_report_permissions() -> None:
+    assert await _role_codes(PIMPINAN_ROLE) == {DASHBOARD_READ, REPORTS_READ, REPORTS_EXPORT}
+
+
+async def test_staf_keuangan_holds_report_permissions() -> None:
+    assert {REPORTS_READ, REPORTS_EXPORT} <= await _role_codes(STAF_KEUANGAN_ROLE)
+
+
+async def test_admin_holds_report_permissions() -> None:
+    assert {REPORTS_READ, REPORTS_EXPORT} <= await _role_codes(ADMIN_ROLE)
 
 
 async def test_seed_is_idempotent_and_keeps_edited_non_admin_roles() -> None:
