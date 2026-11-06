@@ -59,6 +59,32 @@ async def invoice_owner_nims(db: AsyncSession, invoices: dict[str, Invoice]) -> 
     }
 
 
+async def unpaid_invoices_for_students(
+    db: AsyncSession,
+    student_ids: Sequence[int],
+    *,
+    exclude_codes: set[str],
+) -> list[Invoice]:
+    """Active unpaid invoices of the given students whose code is not in ``exclude_codes``."""
+    if not student_ids:
+        return []
+    found: list[Invoice] = []
+    for chunk in _chunks(sorted(set(student_ids))):
+        stmt = (
+            select(Invoice)
+            .where(
+                Invoice.student_id.in_(chunk),
+                Invoice.deleted_at.is_(None),
+                Invoice.status == InvoiceStatus.UNPAID.value,
+            )
+            .options(noload(Invoice.student))
+        )
+        for invoice in await db.scalars(stmt):
+            if invoice.invoice_code not in exclude_codes:
+                found.append(invoice)
+    return found
+
+
 def belongs_to_other_student(row: ValidRow, owners: dict[str, str]) -> bool:
     """The invoice code exists and is stored for a different NIM than the row's (likely a typo).
 

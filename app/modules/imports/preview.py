@@ -17,6 +17,7 @@ from .existing import (
     invoices_by_code,
     is_sticky_skip,
     students_by_nim,
+    unpaid_invoices_for_students,
 )
 from .parser import ParsedSheet
 from .validation import RowIssue, ValidRow, validate_row
@@ -53,11 +54,23 @@ async def build_preview(
     accepted, cross_issues = _cross_row_checks(valid, known_nims=set(students), owners=owners)
     issues = sorted([*issues, *cross_issues], key=lambda issue: issue.row_number)
 
+    imported_codes = {row.invoice_code for row in accepted}
+    students_with_new_invoice = [
+        students[row.nim].id
+        for row in accepted
+        if row.invoice_code not in invoices and row.nim in students
+    ]
+    superseded = await unpaid_invoices_for_students(
+        db,
+        students_with_new_invoice,
+        exclude_codes=imported_codes,
+    )
+
     summary = {
         "rows_total": len(sheet.rows),
         "rows_valid": len(accepted),
         "rows_error": len({issue.row_number for issue in issues}),
-        **_predict(accepted, students, invoices),
+        **_predict(accepted, students, invoices, superseded_count=len(superseded)),
     }
     return PreviewResult(rows=accepted, issues=issues, summary=summary)
 
@@ -89,7 +102,11 @@ def _cross_row_checks(
 
 
 def _predict(
-    rows: list[ValidRow], students: dict[str, Student], invoices: dict[str, Invoice]
+    rows: list[ValidRow],
+    students: dict[str, Student],
+    invoices: dict[str, Invoice],
+    *,
+    superseded_count: int = 0,
 ) -> dict[str, int]:
     nims = {row.nim for row in rows}
     new_invoices = updated = skipped = 0
@@ -105,6 +122,6 @@ def _predict(
         "students_new": len(nims - students.keys()),
         "students_updated": len(nims & students.keys()),
         "invoices_new": new_invoices,
-        "invoices_updated": updated,
+        "invoices_updated": updated + superseded_count,
         "invoices_skipped": skipped,
     }

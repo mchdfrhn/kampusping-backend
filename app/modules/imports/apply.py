@@ -2,21 +2,26 @@
 
 from datetime import date, datetime
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import VALIDATION_ERROR
 from app.core.exceptions import AppException
 from app.modules.invoices.constants import InvoiceStatus
 from app.modules.invoices.model import Invoice
+from app.modules.messages.constants import CancelReason, MessageStatus
+from app.modules.messages.model import Message
 from app.modules.students.constants import PhoneStatus
 from app.modules.students.model import Student
 
 from .existing import (
+    _chunks,
     belongs_to_other_student,
     invoice_owner_nims,
     invoices_by_code,
     is_sticky_skip,
     students_by_nim,
+    unpaid_invoices_for_students,
 )
 from .validation import ValidRow
 
@@ -102,6 +107,27 @@ def _mark_paid(invoice: Invoice, row: ValidRow, source: str, today: date) -> Non
     invoice.paid_via = row.paid_via or source
 
 
+async def _cancel_queued_messages(
+    db: AsyncSession, invoice_ids: list[int], *, actor: str, now: datetime
+) -> None:
+    """Cancel any queued WhatsApp messages for invoices that became paid during the import."""
+    for chunk in _chunks(sorted(set(invoice_ids))):
+        await db.execute(
+            update(Message)
+            .where(
+                Message.invoice_id.in_(chunk),
+                Message.status == MessageStatus.QUEUED.value,
+            )
+            .values(
+                status=MessageStatus.CANCELLED.value,
+                cancel_reason=CancelReason.PAID.value,
+                updated_by=actor,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+
+
 async def apply_rows(
     db: AsyncSession,
     rows: list[ValidRow],
@@ -114,8 +140,10 @@ async def apply_rows(
     """Upsert students by NIM, then invoices by code; returns the actual counts.
 
     An invoice that is already paid keeps its status, ``paid_at`` and ``paid_via``; an unpaid row
-    against it only updates the other fields and counts as skipped. Invoices absent from the file
-    are not touched.
+    against it only updates the other fields and counts as skipped. When an existing student
+    receives a new invoice code in the file, any previous unpaid invoices of that student that are
+    absent from the file are automatically marked paid (and their queued messages cancelled).
+    Invoices of students not receiving a new invoice are untouched.
     """
     invoices = await invoices_by_code(db, [row.invoice_code for row in rows])
     # Preview already rejects these rows; check again because the database may have changed since.
@@ -123,6 +151,18 @@ async def apply_rows(
     owners = await invoice_owner_nims(db, invoices)
     rows = [row for row in rows if not belongs_to_other_student(row, owners)]
     students = await students_by_nim(db, [row.nim for row in rows])
+
+    imported_codes = {row.invoice_code for row in rows}
+    students_with_new_invoice = [
+        students[row.nim].id
+        for row in rows
+        if row.invoice_code not in invoices and row.nim in students
+    ]
+    superseded_invoices = await unpaid_invoices_for_students(
+        db,
+        students_with_new_invoice,
+        exclude_codes=imported_codes,
+    )
 
     new_nims: set[str] = set()
     updated_nims: set[str] = set()
@@ -138,6 +178,7 @@ async def apply_rows(
     await db.flush()  # new students need their ids for the invoices
 
     counts = {"invoices_new": 0, "invoices_updated": 0, "invoices_skipped": 0}
+    paid_invoice_ids: list[int] = []
     for row in rows:
         invoice = invoices.get(row.invoice_code)
         if invoice is None:
@@ -170,10 +211,22 @@ async def apply_rows(
         if row.status == InvoiceStatus.PAID.value and invoice.status != InvoiceStatus.PAID.value:
             _mark_paid(invoice, row, source, today)
             changed = True
+            paid_invoice_ids.append(invoice.id)
         if changed:
             _touch(invoice, actor, now)
         counts["invoices_skipped" if skipped else "invoices_updated"] += 1
+
+    for old_invoice in superseded_invoices:
+        old_invoice.status = InvoiceStatus.PAID.value
+        old_invoice.paid_at = today
+        old_invoice.paid_via = source
+        _touch(old_invoice, actor, now)
+        counts["invoices_updated"] += 1
+        paid_invoice_ids.append(old_invoice.id)
+
     await db.flush()
+    if paid_invoice_ids:
+        await _cancel_queued_messages(db, paid_invoice_ids, actor=actor, now=now)
 
     return {
         "students_new": len(new_nims),

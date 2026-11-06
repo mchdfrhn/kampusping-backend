@@ -14,6 +14,7 @@ from app.db.session import get_session_factory
 from app.modules.imports.model import ImportBatch
 from app.modules.imports.service import ImportService
 from app.modules.invoices.model import Invoice
+from app.modules.messages.model import Message
 from app.modules.students.model import Student
 from app.modules.users.model import User
 
@@ -284,21 +285,63 @@ async def test_import_never_changes_opted_out_at(
     assert student.opted_out_reason == "Minta berhenti"
 
 
-async def test_unlisted_invoices_untouched(
-    client: httpx.AsyncClient, staf_headers: dict[str, str]
+async def test_new_invoice_auto_marks_old_unpaid_invoice_paid_and_cancels_queued_messages(
+    app: FastAPI, client: httpx.AsyncClient, staf_headers: dict[str, str]
 ) -> None:
+    freeze_clock(app, datetime(2026, 11, 5, 3, 0, tzinfo=UTC))
     student_id = await make_student("2201", "Budi")
-    await make_invoice(student_id, "INV-OLD", amount=1_234_000, status="unpaid")
-    before = await invoice_by_code("INV-OLD")
+    old_id = await make_invoice(student_id, "INV-OLD", amount=1_234_000, status="unpaid")
+    await make_invoice(
+        student_id, "INV-ALREADY-PAID", amount=900_000, status="paid", paid_via="sipema"
+    )
+    other_student_id = await make_student("2202", "Siti")
+    await make_invoice(other_student_id, "INV-OTHER", amount=2_000_000, status="unpaid")
+    before_other = await invoice_by_code("INV-OTHER")
 
-    await import_lines(client, staf_headers, line(nim="2201", name="", code="INV-NEW"))
+    async with get_session_factory()() as db:
+        db.add(
+            Message(
+                student_id=student_id,
+                invoice_id=old_id,
+                rule_id=None,
+                kind="manual",
+                scheduled_date=date(2026, 11, 5),
+                body="Tagihan lama",
+                status="queued",
+            )
+        )
+        await db.commit()
 
-    after = await invoice_by_code("INV-OLD")
-    assert after.amount == 1_234_000
-    assert after.status == "unpaid"
-    assert after.updated_at == before.updated_at
-    assert after.deleted_at is None
-    assert await count(Invoice) == 2
+    previewed = await preview(client, staf_headers, line(nim="2201", name="", code="INV-NEW"))
+    assert previewed["summary"]["invoices_new"] == 1
+    assert previewed["summary"]["invoices_updated"] == 1
+
+    applied = (await apply(client, staf_headers, previewed["id"])).json()
+    assert applied["summary"]["invoices_new"] == 1
+    assert applied["summary"]["invoices_updated"] == 1
+
+    after_old = await invoice_by_code("INV-OLD")
+    assert after_old.amount == 1_234_000
+    assert after_old.status == "paid"
+    assert after_old.paid_at == date(2026, 11, 5)
+    assert after_old.paid_via == "siakad"
+    assert after_old.deleted_at is None
+
+    after_new = await invoice_by_code("INV-NEW")
+    assert after_new.status == "unpaid"
+
+    # Queued message on the old invoice is automatically cancelled with reason 'paid'.
+    async with get_session_factory()() as db:
+        msg = await db.scalar(select(Message).where(Message.invoice_id == old_id))
+        assert msg is not None
+        assert msg.status == "cancelled"
+        assert msg.cancel_reason == "paid"
+
+    # Unlisted invoice of another student not in the file remains untouched.
+    after_other = await invoice_by_code("INV-OTHER")
+    assert after_other.status == "unpaid"
+    assert after_other.updated_at == before_other.updated_at
+    assert await count(Invoice) == 4
 
 
 async def test_apply_restores_soft_deleted_student_and_invoice(
