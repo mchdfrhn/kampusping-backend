@@ -30,6 +30,7 @@ from .schema import (
     InvoiceDeleteByFilePreview,
     InvoiceDeleteByFileResult,
     InvoiceDeletePreviewItem,
+    InvoiceFilterOptions,
 )
 
 
@@ -57,6 +58,9 @@ class InvoiceService:
             due_to=due_to,
             student_id=student_id,
         )
+
+    async def filter_options(self) -> InvoiceFilterOptions:
+        return InvoiceFilterOptions(semesters=await self.invoices.distinct_semesters())
 
     async def get(self, invoice_id: int) -> Invoice:
         invoice = await self.invoices.get(invoice_id)

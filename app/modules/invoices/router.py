@@ -14,6 +14,7 @@ from .schema import (
     InvoiceDeleteByCodesRequest,
     InvoiceDeleteByFilePreview,
     InvoiceDeleteByFileResult,
+    InvoiceFilterOptions,
     InvoiceRead,
     InvoiceStatusUpdate,
 )
@@ -50,6 +51,15 @@ async def list_invoices(
         page=params.page,
         page_size=params.page_size,
     )
+
+
+@router.get(
+    "/filter-options",
+    response_model=InvoiceFilterOptions,
+    summary="Semesters available as list filters",
+)
+async def get_invoice_filter_options(db: DbSession, _: CanRead) -> InvoiceFilterOptions:
+    return await InvoiceService(db).filter_options()
 
 
 @router.patch(

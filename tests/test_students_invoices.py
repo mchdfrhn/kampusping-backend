@@ -336,6 +336,29 @@ async def test_invoices_list_embeds_student_and_filters(
     assert [row["invoice_code"] for row in by_student_name.json()["items"]] == ["INV-3"]
 
 
+async def test_invoices_filter_options_lists_distinct_semesters_sorted(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    student = await make_student("2201", "Budi")
+    await make_invoice(student, "INV-1", semester="2024/2025 Ganjil")
+    await make_invoice(student, "INV-2", semester="2025/2026 Ganjil")
+    await make_invoice(student, "INV-3", semester="2024/2025 Ganjil")
+
+    response = await client.get(f"{INVOICES_URL}/filter-options", headers=staf_headers)
+    assert response.status_code == 200
+    assert response.json() == {
+        "semesters": ["2025/2026 Ganjil", "2024/2025 Ganjil"],
+    }
+
+
+async def test_invoices_filter_options_empty_without_invoices(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    response = await client.get(f"{INVOICES_URL}/filter-options", headers=staf_headers)
+    assert response.status_code == 200
+    assert response.json() == {"semesters": []}
+
+
 async def test_invoices_pagination_and_sort_whitelist(
     client: httpx.AsyncClient, staf_headers: dict[str, str]
 ) -> None:
@@ -513,6 +536,7 @@ READ_ENDPOINTS = [
     f"{STUDENTS_URL}/1",
     f"{STUDENTS_URL}/filter-options",
     INVOICES_URL,
+    f"{INVOICES_URL}/filter-options",
 ]
 WRITE_ENDPOINTS: list[tuple[str, dict[str, Any]]] = [
     (f"{STUDENTS_URL}/1", {"phone": "081234567890"}),

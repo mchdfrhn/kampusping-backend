@@ -31,6 +31,10 @@ class InvoiceStatusUpdate(BaseModel):
     status: InvoiceStatus
 
 
+class InvoiceFilterOptions(BaseModel):
+    semesters: list[str]
+
+
 class InvoiceDeletePreviewItem(BaseModel):
     id: int
     invoice_code: str

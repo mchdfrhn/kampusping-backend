@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import or_
+from sqlalchemy import distinct, or_, select
 
 from app.modules.students.model import Student
 from app.shared.pagination import ListParams
@@ -56,3 +56,14 @@ class InvoiceRepository(BaseRepository[Invoice]):
         if student_id is not None:
             stmt = stmt.where(Invoice.student_id == student_id)
         return await self.paginate(stmt, params)
+
+    async def distinct_semesters(self) -> list[str]:
+        stmt = (
+            select(distinct(Invoice.semester))
+            .where(
+                Invoice.deleted_at.is_(None),
+                Invoice.semester != "",
+            )
+            .order_by(Invoice.semester.desc())
+        )
+        return [val for val in (await self.db.scalars(stmt)).all() if val]
