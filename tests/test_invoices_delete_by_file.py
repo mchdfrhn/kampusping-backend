@@ -185,4 +185,3 @@ async def test_hard_delete_by_codes(client: httpx.AsyncClient) -> None:
         assert inv is None
         inv2 = await db.scalar(select(Invoice).where(Invoice.invoice_code == "INV-A2"))
         assert inv2 is None
-

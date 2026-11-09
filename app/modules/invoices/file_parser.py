@@ -92,4 +92,3 @@ def extract_invoice_codes_from_file(filename: str, content: bytes) -> list[str]:
         )
 
     return codes
-
