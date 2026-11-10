@@ -2,7 +2,7 @@
 
 from app.modules.audit.model import AuditEvent
 from app.modules.auth.model import RefreshToken
-from app.modules.imports.model import ImportBatch, ImportRowError
+from app.modules.imports.model import ImportBatch, ImportChange, ImportRowError
 from app.modules.invoices.model import Invoice
 from app.modules.messages.model import Message
 from app.modules.roles.model import Permission, Role, role_permissions
@@ -16,6 +16,7 @@ __all__ = [
     "AppSettings",
     "AuditEvent",
     "ImportBatch",
+    "ImportChange",
     "ImportRowError",
     "Invoice",
     "Message",

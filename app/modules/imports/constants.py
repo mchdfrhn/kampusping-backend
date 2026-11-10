@@ -5,11 +5,23 @@ class ImportStatus(StrEnum):
     PREVIEW = "preview"
     APPLIED = "applied"
     DISCARDED = "discarded"
+    ROLLED_BACK = "rolled_back"
+
+
+class ChangeEntity(StrEnum):
+    STUDENT = "student"
+    INVOICE = "invoice"
+
+
+class ChangeAction(StrEnum):
+    CREATED = "created"
+    UPDATED = "updated"
 
 
 AUDIT_IMPORT_PREVIEWED = "import.previewed"
 AUDIT_IMPORT_APPLIED = "import.applied"
 AUDIT_IMPORT_DISCARDED = "import.discarded"
+AUDIT_IMPORT_ROLLED_BACK = "import.rolled_back"
 AUDIT_ENTITY_IMPORT = "import_batch"
 
 SUMMARY_KEYS = (
