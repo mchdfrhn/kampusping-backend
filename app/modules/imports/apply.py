@@ -14,6 +14,7 @@ from app.modules.messages.model import Message
 from app.modules.students.constants import PhoneStatus
 from app.modules.students.model import Student
 
+from .changes import ChangeRecorder
 from .existing import (
     _chunks,
     belongs_to_other_student,
@@ -136,6 +137,7 @@ async def apply_rows(
     actor: str,
     now: datetime,
     today: date,
+    recorder: ChangeRecorder | None = None,
 ) -> dict[str, int]:
     """Upsert students by NIM, then invoices by code; returns the actual counts.
 
@@ -143,7 +145,8 @@ async def apply_rows(
     against it only updates the other fields and counts as skipped. When an existing student
     receives a new invoice code in the file, any previous unpaid invoices of that student that are
     absent from the file are automatically marked paid (and their queued messages cancelled).
-    Invoices of students not receiving a new invoice are untouched.
+    Invoices of students not receiving a new invoice are untouched. A ``recorder`` logs what was
+    created or changed so the import can be rolled back.
     """
     invoices = await invoices_by_code(db, [row.invoice_code for row in rows])
     # Preview already rejects these rows; check again because the database may have changed since.
@@ -153,16 +156,23 @@ async def apply_rows(
     students = await students_by_nim(db, [row.nim for row in rows])
 
     imported_codes = {row.invoice_code for row in rows}
+    # An invoice restored from the soft-deleted state (e.g. after a rollback) starts over like a
+    # new one, so it supersedes the student's older unpaid invoices exactly as the first import did.
     students_with_new_invoice = [
         students[row.nim].id
         for row in rows
-        if row.invoice_code not in invoices and row.nim in students
+        if row.nim in students
+        and (row.invoice_code not in invoices or invoices[row.invoice_code].deleted_at is not None)
     ]
     superseded_invoices = await unpaid_invoices_for_students(
         db,
         students_with_new_invoice,
         exclude_codes=imported_codes,
     )
+
+    if recorder is not None:  # existing rows are snapshotted before anything mutates them
+        for existing in (*students.values(), *invoices.values(), *superseded_invoices):
+            recorder.snapshot(existing)
 
     new_nims: set[str] = set()
     updated_nims: set[str] = set()
@@ -171,6 +181,8 @@ async def apply_rows(
         if row.nim not in students:
             db.add(student)
             students[row.nim] = student
+            if recorder is not None:
+                recorder.created(student)
         if is_new:
             new_nims.add(row.nim)
         elif row.nim not in new_nims:
@@ -199,11 +211,20 @@ async def apply_rows(
                 _mark_paid(invoice, row, source, today)
             db.add(invoice)
             invoices[row.invoice_code] = invoice
+            if recorder is not None:
+                recorder.created(invoice)
             counts["invoices_new"] += 1
             continue
 
-        skipped = is_sticky_skip(invoice, row)
+        # A restored invoice is treated as new: the file decides paid or unpaid again (paid is
+        # sticky only for an invoice that stayed active).
+        restoring = invoice.deleted_at is not None
+        skipped = not restoring and is_sticky_skip(invoice, row)
         changed = _restore(invoice)
+        if restoring:
+            changed = _set(invoice, "status", InvoiceStatus.UNPAID.value) or changed
+            changed = _set(invoice, "paid_at", None) or changed
+            changed = _set(invoice, "paid_via", None) or changed
         changed = _set(invoice, "amount", row.amount) or changed
         changed = _set(invoice, "due_date", row.due_date) or changed
         changed = _set(invoice, "semester", row.semester) or changed

@@ -93,7 +93,24 @@ Transitions in detail:
 | `expired`       | Planner: a queued auto message older than the 3-day planning window                                |
 | `superseded`    | Planner: a newer queued message exists for the same invoice                                        |
 | `escalated`     | The invoice passed the escalation offset (planner for queued messages, re-check for ones in retry) |
-| `manual`        | Staff cancelled it, or the student/invoice was soft-deleted (re-check)                             |
+| `manual`        | Staff cancelled it, the student/invoice was soft-deleted (re-check), or an import rollback deleted the invoice (`error` = "Impor dibatalkan") |
+
+### Import rollback and the queue
+
+Rolling back an applied import (`POST /imports/{id}/rollback`, `imports/rollback.py`) soft-deletes
+the invoices that import created and cancels their `queued` messages (`cancelled(manual)`). Messages
+already `sent`/`delivered`/`read` stay in the send log: they cannot be recalled. A message in
+`sending` is stopped by the FR-06 re-check (the invoice is deleted). Invoices the import only
+changed go back to their previous values; an invoice that returns from paid to unpaid keeps its old
+`cancelled(paid)` message, and because `(invoice_id, rule_id)` is unique the planner does not plan
+that rule again, so no duplicate and no AB-03 breach.
+
+Re-importing after a rollback treats a restored (soft-deleted) invoice as new: the file decides
+paid or unpaid again, and the student's older unpaid invoices are superseded again, exactly as in
+the first import. Known limitation: a queued reminder that rollback cancelled (`manual`) keeps its
+`(invoice_id, rule_id)` slot, so that rule is not planned again for the restored invoice (later
+rules are). Rollback and apply serialise on a PostgreSQL advisory lock (`imports/locking.py`), and
+rollback row-locks the affected students and invoices while it checks for conflicts.
 
 ## Planner rules (`planner.py`, `repository.py`)
 

@@ -20,6 +20,16 @@
 - Unique columns (`users.email`, `roles.name`) also cover soft-deleted
   rows, so a deleted email or code cannot be reused. Services check this and return `409`.
 
+### Import change log (migration 008)
+
+`import_changes` records every student and invoice an applied import created (`action = created`,
+`before` NULL) or changed (`action = updated`), with only the tracked fields that changed in
+`before` / `after` (`app/modules/imports/changes.py`). `import_batches.has_change_log` is true for
+batches applied after migration 008; batches applied earlier have no log and **cannot be rolled
+back**. Rolling a batch back sets `import_batches.status = 'rolled_back'` and `rolled_back_at`.
+The log holds personal data (name, phone), so keep retention in mind (UU PDP; not decided yet).
+Migration 008 grants no permission: `imports:rollback` reaches `admin` through the seed only.
+
 ## Migrations
 
 Write them by hand with `op.create_table`; the helpers keep them portable:

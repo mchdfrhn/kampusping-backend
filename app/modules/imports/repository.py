@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import undefer
 
@@ -36,17 +36,19 @@ class ImportBatchRepository(BaseRepository[ImportBatch]):
             .execution_options(populate_existing=True)
         )
 
-    async def claim_preview(self, batch_id: int, values: dict[str, object]) -> bool:
-        """Atomically move a batch from ``preview`` to another status; ``False`` if it is not.
+    async def _claim(
+        self, batch_id: int, from_status: ImportStatus, values: dict[str, object]
+    ) -> bool:
+        """Atomically update a batch only while it is in ``from_status``; ``False`` if it is not.
 
-        ``UPDATE ... WHERE status = 'preview'`` lets exactly one of several concurrent callers win
-        (the others see zero rows changed), and the row lock it takes is held until commit.
+        ``UPDATE ... WHERE status = <from_status>`` lets exactly one of several concurrent callers
+        win (the others see zero rows changed), and the row lock it takes is held until commit.
         """
         result = await self.db.execute(
             update(ImportBatch)
             .where(
                 ImportBatch.id == batch_id,
-                ImportBatch.status == ImportStatus.PREVIEW.value,
+                ImportBatch.status == from_status.value,
                 ImportBatch.deleted_at.is_(None),
             )
             .values(**values)
@@ -54,6 +56,26 @@ class ImportBatchRepository(BaseRepository[ImportBatch]):
         )
         assert isinstance(result, CursorResult)  # noqa: S101 - narrows the type for pyright
         return result.rowcount > 0
+
+    async def claim_preview(self, batch_id: int, values: dict[str, object]) -> bool:
+        """Move a batch from ``preview`` to another status (apply or discard)."""
+        return await self._claim(batch_id, ImportStatus.PREVIEW, values)
+
+    async def claim_applied(self, batch_id: int, values: dict[str, object]) -> bool:
+        """Move a batch from ``applied`` to another status (rollback)."""
+        return await self._claim(batch_id, ImportStatus.APPLIED, values)
+
+    async def latest_applied_id(self) -> int | None:
+        """The applied batch with the newest ``applied_at`` (the only one rollback may target)."""
+        return await self.db.scalar(
+            select(ImportBatch.id)
+            .where(
+                ImportBatch.status == ImportStatus.APPLIED.value,
+                ImportBatch.deleted_at.is_(None),
+            )
+            .order_by(ImportBatch.applied_at.desc(), ImportBatch.id.desc())
+            .limit(1)
+        )
 
 
 class ImportRowErrorRepository(BaseRepository[ImportRowError]):

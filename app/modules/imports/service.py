@@ -1,5 +1,8 @@
+import builtins
 from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import PureWindowsPath
+from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,23 +16,33 @@ from app.shared.pagination import ListParams
 from app.shared.utils import utc_now
 
 from .apply import apply_rows
+from .changes import ChangeRecorder
 from .constants import (
     AUDIT_ENTITY_IMPORT,
     AUDIT_IMPORT_APPLIED,
     AUDIT_IMPORT_DISCARDED,
     AUDIT_IMPORT_PREVIEWED,
+    AUDIT_IMPORT_ROLLED_BACK,
     FILE_NAME_MAX,
+    MAX_REPORTED_CONFLICTS,
     MAX_STORED_ISSUES,
     MSG_BATCH_NOT_FOUND,
     MSG_BATCH_NOT_PREVIEW,
     MSG_NO_VALID_ROWS,
+    MSG_ROLLBACK_CONFLICT,
+    MSG_ROLLBACK_NO_LOG,
+    MSG_ROLLBACK_NOT_APPLIED,
+    MSG_ROLLBACK_NOT_LATEST,
     ImportStatus,
 )
+from .locking import lock_imports
 from .model import ImportBatch, ImportRowError
 from .parser import ImportFileError, parse_upload, resolve_columns
 from .payload import row_from_json, row_to_json
 from .preview import build_preview
 from .repository import ImportBatchRepository, ImportRowErrorRepository
+from .rollback import RollbackPlan, build_plan, execute_plan
+from .schema import ImportBatchRead, RollbackConflictRead, RollbackPreview
 
 
 def safe_file_name(filename: str) -> str:
@@ -39,6 +52,33 @@ def safe_file_name(filename: str) -> str:
 
 def _not_in_preview() -> AppException:
     return AppException(MSG_BATCH_NOT_PREVIEW, status_code=409, code=CONFLICT)
+
+
+def _conflict(message: str, details: object = None) -> AppException:
+    return AppException(message, status_code=409, code=CONFLICT, details=details)
+
+
+def _rollback_block(
+    batch: ImportBatch, latest_applied_id: int | None
+) -> Literal["no_change_log", "not_latest"] | None:
+    """Why ``batch`` cannot be rolled back right now (``None``: it can, or it is not applied)."""
+    if batch.status != ImportStatus.APPLIED.value:
+        return None
+    if not batch.has_change_log:
+        return "no_change_log"
+    if batch.id != latest_applied_id:
+        return "not_latest"
+    return None
+
+
+def _impact(plan: RollbackPlan) -> dict[str, int]:
+    return {
+        "students_deleted": plan.students_deleted,
+        "invoices_deleted": plan.invoices_deleted,
+        "students_reverted": plan.students_reverted,
+        "invoices_reverted": plan.invoices_reverted,
+        "queued_messages_cancelled": plan.queued_messages,
+    }
 
 
 class ImportService:
@@ -118,6 +158,7 @@ class ImportService:
         simultaneous applies exactly one proceeds and the rest get 409. Any failure afterwards
         rolls the claim back together with the data changes.
         """
+        await lock_imports(self.db)
         existing = await self.get(batch_id)
         if existing.status == ImportStatus.PREVIEW.value and not existing.summary.get("rows_valid"):
             raise AppException(MSG_NO_VALID_ROWS, status_code=422, code=VALIDATION_ERROR)
@@ -138,6 +179,7 @@ class ImportService:
         if batch is None:  # deleted between the claim and the read: nothing sensible to apply
             raise AppException(MSG_BATCH_NOT_FOUND, status_code=404, code=NOT_FOUND)
         rows = [row_from_json(data) for data in batch.rows or []]
+        recorder = ChangeRecorder()
         counts = await apply_rows(
             self.db,
             rows,
@@ -145,7 +187,10 @@ class ImportService:
             actor=actor.email,
             now=now,
             today=local_today(now, settings.app_timezone),
+            recorder=recorder,
         )
+        self.db.add_all(recorder.build(batch_id=batch.id, actor=actor.email, now=now))
+        batch.has_change_log = True
         batch.summary = {**batch.summary, **counts}
         batch.rows = None
         await record_audit(
@@ -181,6 +226,85 @@ class ImportService:
             entity=AUDIT_ENTITY_IMPORT,
             entity_id=batch.id,
             detail={**batch.summary},
+        )
+        await self.db.commit()
+        return batch
+
+    async def read_models(self, batches: Sequence[ImportBatch]) -> builtins.list[ImportBatchRead]:
+        """Read schemas with ``rollback_block`` filled (one extra query for the whole page)."""
+        latest = await self.batches.latest_applied_id()
+        items: builtins.list[ImportBatchRead] = []
+        for batch in batches:
+            item = ImportBatchRead.model_validate(batch)
+            item.rollback_block = _rollback_block(batch, latest)
+            items.append(item)
+        return items
+
+    async def _rollbackable(self, batch_id: int) -> ImportBatch:
+        batch = await self.get(batch_id)
+        if batch.status != ImportStatus.APPLIED.value:
+            raise _conflict(MSG_ROLLBACK_NOT_APPLIED)
+        block = _rollback_block(batch, await self.batches.latest_applied_id())
+        if block == "no_change_log":
+            raise _conflict(MSG_ROLLBACK_NO_LOG)
+        if block == "not_latest":
+            raise _conflict(MSG_ROLLBACK_NOT_LATEST)
+        return batch
+
+    async def rollback_preview(self, batch_id: int) -> RollbackPreview:
+        """What a rollback would do and what blocks it; changes nothing."""
+        await self._rollbackable(batch_id)
+        plan = await build_plan(self.db, batch_id)
+        return RollbackPreview(
+            **_impact(plan),
+            sent_messages=plan.sent_messages,
+            conflicts=[
+                RollbackConflictRead(**asdict(c)) for c in plan.conflicts[:MAX_REPORTED_CONFLICTS]
+            ],
+            conflicts_total=len(plan.conflicts),
+        )
+
+    async def rollback(self, batch_id: int, actor: User) -> ImportBatch:
+        """Undo an applied import in one transaction (see ``rollback.py``).
+
+        Like ``apply``, the batch is claimed first (``UPDATE ... WHERE status = 'applied'``) so of
+        several simultaneous rollbacks exactly one proceeds. Any conflict or failure afterwards
+        rolls the claim back together with the data changes: nothing is applied partially.
+        """
+        await lock_imports(self.db)  # after this no apply is mid-flight, so "latest" is reliable
+        batch = await self._rollbackable(batch_id)
+        now = self.clock()
+        claimed = await self.batches.claim_applied(
+            batch_id,
+            {
+                "status": ImportStatus.ROLLED_BACK.value,
+                "rolled_back_at": now,
+                "updated_by": actor.email,
+                "updated_at": now,
+            },
+        )
+        if not claimed:
+            raise _conflict(MSG_ROLLBACK_NOT_APPLIED)
+
+        plan = await build_plan(self.db, batch_id, lock=True)
+        if plan.conflicts:
+            await self.db.rollback()  # releases the claim
+            raise _conflict(
+                MSG_ROLLBACK_CONFLICT,
+                {
+                    "conflicts": [asdict(c) for c in plan.conflicts[:MAX_REPORTED_CONFLICTS]],
+                    "conflicts_total": len(plan.conflicts),
+                },
+            )
+        await execute_plan(self.db, plan, actor=actor.email, now=now)
+        await self.db.refresh(batch)
+        await record_audit(
+            self.db,
+            actor=actor.email,
+            action=AUDIT_IMPORT_ROLLED_BACK,
+            entity=AUDIT_ENTITY_IMPORT,
+            entity_id=batch.id,
+            detail=_impact(plan),
         )
         await self.db.commit()
         return batch
