@@ -34,6 +34,7 @@ DASHBOARD_READ = "dashboard:read"
 
 IMPORTS_READ = "imports:read"
 IMPORTS_CREATE = "imports:create"
+IMPORTS_ROLLBACK = "imports:rollback"
 
 STUDENTS_READ = "students:read"
 STUDENTS_UPDATE = "students:update"
@@ -75,6 +76,7 @@ PERMISSIONS: tuple[PermissionDef, ...] = (
     PermissionDef(DASHBOARD_READ, "Melihat dasbor"),
     PermissionDef(IMPORTS_READ, "Melihat riwayat impor"),
     PermissionDef(IMPORTS_CREATE, "Mengunggah dan memproses impor tagihan"),
+    PermissionDef(IMPORTS_ROLLBACK, "Membatalkan impor yang sudah diterapkan (rollback)"),
     PermissionDef(STUDENTS_READ, "Melihat data mahasiswa"),
     PermissionDef(STUDENTS_UPDATE, "Mengubah data mahasiswa"),
     PermissionDef(INVOICES_READ, "Melihat tagihan"),
@@ -103,10 +105,12 @@ ADMIN_ROLE = "admin"
 STAF_KEUANGAN_ROLE = "staf_keuangan"
 PIMPINAN_ROLE = "pimpinan"
 
-# Staf keuangan runs the daily reminder workflow: everything except user/role administration
-# and the audit trail.
+# Staf keuangan runs the daily reminder workflow: everything except user/role administration,
+# the audit trail and rolling back an applied import (admin only).
 STAF_KEUANGAN_PERMISSION_CODES: tuple[str, ...] = tuple(
-    code for code in ALL_PERMISSION_CODES if not code.startswith(("users:", "roles:", "audit:"))
+    code
+    for code in ALL_PERMISSION_CODES
+    if not code.startswith(("users:", "roles:", "audit:")) and code != IMPORTS_ROLLBACK
 )
 
 # System roles: created by the seed. `admin` is re-synced to hold every permission on each seed;

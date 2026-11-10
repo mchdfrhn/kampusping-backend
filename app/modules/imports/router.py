@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from app.api.deps import ClockDep, DbSession, require_permissions
 from app.core.constants import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
-from app.core.permissions import IMPORTS_CREATE, IMPORTS_READ
+from app.core.permissions import IMPORTS_CREATE, IMPORTS_READ, IMPORTS_ROLLBACK
 from app.modules.invoices.constants import InvoiceSource
 from app.modules.users.model import User
 from app.shared.pagination import ListParams, ListQuery, Page, SortOrder
 
 from .parser import MAX_FILE_BYTES
-from .schema import ImportBatchRead, ImportRowErrorRead
+from .schema import ImportBatchRead, ImportRowErrorRead, RollbackPreview
 from .service import ImportService
 from .validation import SEMESTER_MAX
 
@@ -18,6 +18,7 @@ router = APIRouter(prefix="/imports", tags=["Imports"])
 
 CanRead = Annotated[User, Depends(require_permissions(IMPORTS_READ))]
 CanCreate = Annotated[User, Depends(require_permissions(IMPORTS_CREATE))]
+CanRollback = Annotated[User, Depends(require_permissions(IMPORTS_ROLLBACK))]
 
 
 def get_error_list_params(
@@ -76,11 +77,32 @@ async def discard_import(
     return ImportBatchRead.model_validate(await ImportService(db, clock).discard(batch_id, actor))
 
 
+@router.post(
+    "/{batch_id}/rollback",
+    response_model=ImportBatchRead,
+    summary="Roll back an applied import (only the latest one)",
+)
+async def rollback_import(
+    batch_id: int, db: DbSession, actor: CanRollback, clock: ClockDep
+) -> ImportBatchRead:
+    return ImportBatchRead.model_validate(await ImportService(db, clock).rollback(batch_id, actor))
+
+
+@router.get(
+    "/{batch_id}/rollback-preview",
+    response_model=RollbackPreview,
+    summary="What rolling back an import would do, and what blocks it",
+)
+async def rollback_preview(batch_id: int, db: DbSession, _: CanRollback) -> RollbackPreview:
+    return await ImportService(db).rollback_preview(batch_id)
+
+
 @router.get("", response_model=Page[ImportBatchRead], summary="List import history")
 async def list_imports(db: DbSession, _: CanRead, params: ListQuery) -> Page[ImportBatchRead]:
-    rows, total = await ImportService(db).list(params)
+    service = ImportService(db)
+    rows, total = await service.list(params)
     return Page(
-        items=[ImportBatchRead.model_validate(row) for row in rows],
+        items=await service.read_models(rows),
         total=total,
         page=params.page,
         page_size=params.page_size,
@@ -89,7 +111,8 @@ async def list_imports(db: DbSession, _: CanRead, params: ListQuery) -> Page[Imp
 
 @router.get("/{batch_id}", response_model=ImportBatchRead, summary="Get one import")
 async def get_import(batch_id: int, db: DbSession, _: CanRead) -> ImportBatchRead:
-    return ImportBatchRead.model_validate(await ImportService(db).get(batch_id))
+    service = ImportService(db)
+    return (await service.read_models([await service.get(batch_id)]))[0]
 
 
 @router.get(

@@ -4,6 +4,7 @@ from app.core.permissions import (
     ADMIN_ROLE,
     ALL_PERMISSION_CODES,
     DASHBOARD_READ,
+    IMPORTS_ROLLBACK,
     PIMPINAN_ROLE,
     REPORTS_EXPORT,
     REPORTS_READ,
@@ -25,15 +26,21 @@ async def test_admin_holds_every_permission() -> None:
     assert await _role_codes(ADMIN_ROLE) == set(ALL_PERMISSION_CODES)
 
 
-async def test_staf_keuangan_has_everything_except_users_roles_audit() -> None:
+async def test_staf_keuangan_has_everything_except_users_roles_audit_and_rollback() -> None:
     codes = await _role_codes(STAF_KEUANGAN_ROLE)
 
     assert codes
     assert not [code for code in codes if code.startswith(("users:", "roles:", "audit:"))]
     expected = {
         code for code in ALL_PERMISSION_CODES if not code.startswith(("users:", "roles:", "audit:"))
-    }
+    } - {IMPORTS_ROLLBACK}
     assert codes == expected
+
+
+async def test_only_admin_holds_the_import_rollback_permission() -> None:
+    assert IMPORTS_ROLLBACK in await _role_codes(ADMIN_ROLE)
+    assert IMPORTS_ROLLBACK not in await _role_codes(STAF_KEUANGAN_ROLE)
+    assert IMPORTS_ROLLBACK not in await _role_codes(PIMPINAN_ROLE)
 
 
 async def test_pimpinan_has_dashboard_and_report_permissions() -> None:

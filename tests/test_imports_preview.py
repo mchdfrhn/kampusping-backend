@@ -278,6 +278,9 @@ async def test_list_and_get_history(
         "created_at",
         "created_by",
         "applied_at",
+        "has_change_log",
+        "rolled_back_at",
+        "rollback_block",
     }
     assert set(body["items"][0]["summary"]) == SUMMARY_KEYS
 
