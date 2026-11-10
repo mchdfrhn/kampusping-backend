@@ -13,6 +13,7 @@ from app.shared.pagination import ListParams
 from app.shared.utils import utc_now
 
 from .apply import apply_rows
+from .changes import ChangeRecorder
 from .constants import (
     AUDIT_ENTITY_IMPORT,
     AUDIT_IMPORT_APPLIED,
@@ -138,6 +139,7 @@ class ImportService:
         if batch is None:  # deleted between the claim and the read: nothing sensible to apply
             raise AppException(MSG_BATCH_NOT_FOUND, status_code=404, code=NOT_FOUND)
         rows = [row_from_json(data) for data in batch.rows or []]
+        recorder = ChangeRecorder()
         counts = await apply_rows(
             self.db,
             rows,
@@ -145,7 +147,10 @@ class ImportService:
             actor=actor.email,
             now=now,
             today=local_today(now, settings.app_timezone),
+            recorder=recorder,
         )
+        self.db.add_all(recorder.build(batch_id=batch.id, actor=actor.email, now=now))
+        batch.has_change_log = True
         batch.summary = {**batch.summary, **counts}
         batch.rows = None
         await record_audit(
