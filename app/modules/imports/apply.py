@@ -156,10 +156,13 @@ async def apply_rows(
     students = await students_by_nim(db, [row.nim for row in rows])
 
     imported_codes = {row.invoice_code for row in rows}
+    # An invoice restored from the soft-deleted state (e.g. after a rollback) starts over like a
+    # new one, so it supersedes the student's older unpaid invoices exactly as the first import did.
     students_with_new_invoice = [
         students[row.nim].id
         for row in rows
-        if row.invoice_code not in invoices and row.nim in students
+        if row.nim in students
+        and (row.invoice_code not in invoices or invoices[row.invoice_code].deleted_at is not None)
     ]
     superseded_invoices = await unpaid_invoices_for_students(
         db,
@@ -213,8 +216,15 @@ async def apply_rows(
             counts["invoices_new"] += 1
             continue
 
-        skipped = is_sticky_skip(invoice, row)
+        # A restored invoice is treated as new: the file decides paid or unpaid again (paid is
+        # sticky only for an invoice that stayed active).
+        restoring = invoice.deleted_at is not None
+        skipped = not restoring and is_sticky_skip(invoice, row)
         changed = _restore(invoice)
+        if restoring:
+            changed = _set(invoice, "status", InvoiceStatus.UNPAID.value) or changed
+            changed = _set(invoice, "paid_at", None) or changed
+            changed = _set(invoice, "paid_via", None) or changed
         changed = _set(invoice, "amount", row.amount) or changed
         changed = _set(invoice, "due_date", row.due_date) or changed
         changed = _set(invoice, "semester", row.semester) or changed

@@ -8,8 +8,9 @@ NIM / invoice code and field *names*, never values (personal data).
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
@@ -24,7 +25,11 @@ from .existing import _chunks
 from .model import ImportChange
 
 MSG_ROLLBACK_CANCEL_ERROR = "Impor dibatalkan"
-MISSING = "missing"
+# Fields the system itself changes after an import (the sender flags a number that is not on
+# WhatsApp). Such a change is not a staff edit, so it must not block a rollback.
+SYSTEM_MANAGED_FIELDS: dict[ChangeEntity, frozenset[str]] = {
+    ChangeEntity.STUDENT: frozenset({"phone_status"}),
+}
 
 Entities = dict[tuple[str, int], Student | Invoice]
 
@@ -50,16 +55,25 @@ class RollbackPlan:
     deleted_invoice_ids: list[int] = field(default_factory=list)
 
 
-async def _load_entities(db: AsyncSession, changes: Sequence[ImportChange]) -> Entities:
+def entities_query(
+    model: type[Student] | type[Invoice], ids: Sequence[int], *, lock: bool = False
+) -> Select[Any]:
+    """Rows of ``model`` with the given ids (soft-deleted included); ``lock`` adds FOR UPDATE."""
+    stmt = select(model).where(model.id.in_(ids))
+    if model is Invoice:
+        stmt = stmt.options(noload(Invoice.student))
+    return stmt.with_for_update() if lock else stmt
+
+
+async def _load_entities(
+    db: AsyncSession, changes: Sequence[ImportChange], *, lock: bool
+) -> Entities:
     """Students and invoices named by the log, soft-deleted ones included."""
     entities: Entities = {}
     for kind, model in ((ChangeEntity.STUDENT, Student), (ChangeEntity.INVOICE, Invoice)):
         ids = sorted({c.entity_id for c in changes if c.entity == kind.value})
         for chunk in _chunks(ids):
-            stmt = select(model).where(model.id.in_(chunk))
-            if model is Invoice:
-                stmt = stmt.options(noload(Invoice.student))
-            for obj in await db.scalars(stmt):
+            for obj in await db.scalars(entities_query(model, chunk, lock=lock)):
                 entities[(kind.value, obj.id)] = obj
     return entities
 
@@ -84,8 +98,12 @@ async def _count_messages(
     return total
 
 
-async def build_plan(db: AsyncSession, batch_id: int) -> RollbackPlan:
-    """What rolling back ``batch_id`` would do, and what blocks it. Reads only."""
+async def build_plan(db: AsyncSession, batch_id: int, *, lock: bool = False) -> RollbackPlan:
+    """What rolling back ``batch_id`` would do, and what blocks it.
+
+    Reads only, except that ``lock=True`` row-locks (FOR UPDATE) the affected students and
+    invoices, so no other transaction can edit them between this check and ``execute_plan``.
+    """
     changes = list(
         await db.scalars(
             select(ImportChange)
@@ -93,20 +111,21 @@ async def build_plan(db: AsyncSession, batch_id: int) -> RollbackPlan:
             .order_by(ImportChange.id)
         )
     )
-    plan = RollbackPlan(changes=changes, entities=await _load_entities(db, changes))
+    plan = RollbackPlan(changes=changes, entities=await _load_entities(db, changes, lock=lock))
 
     for change in changes:
         entity = ChangeEntity(change.entity)
         obj = plan.entities.get((change.entity, change.entity_id))
-        if obj is None:
-            plan.conflicts.append(RollbackConflict(change.entity, str(change.entity_id), [MISSING]))
+        if obj is None:  # hard-deleted since the import: nothing left to undo
             continue
 
         current = serialize_fields(entity, obj)
         conflicting = [
             name
             for name in TRACKED_FIELDS[entity]
-            if name in change.after and current[name] != change.after[name]
+            if name in change.after
+            and name not in SYSTEM_MANAGED_FIELDS.get(entity, frozenset())
+            and current[name] != change.after[name]
         ]
         if conflicting:
             plan.conflicts.append(RollbackConflict(change.entity, _label(obj), conflicting))

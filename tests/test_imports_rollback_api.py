@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -338,3 +339,62 @@ async def test_rolled_back_superseded_invoice_does_not_duplicate_messages(
     assert [(m.status, m.cancel_reason, m.rule_id) for m in after] == [
         ("cancelled", "paid", rule_id)
     ]
+
+
+# --- re-import after a rollback behaves like a first import -----------------------------------
+
+
+async def test_reimport_after_rollback_supersedes_old_invoices_again(
+    client: httpx.AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    await import_lines(client, admin_headers, line(nim="2201", code="INV-1"))
+    carrying = await import_lines(client, admin_headers, line(nim="2201", code="INV-2"))
+    assert (await invoice_by_code("INV-1")).status == "paid"
+    assert (await rollback(client, admin_headers, carrying["id"])).status_code == 200
+    assert (await invoice_by_code("INV-1")).status == "unpaid"
+
+    await import_lines(client, admin_headers, line(nim="2201", code="INV-2"))
+
+    assert (await invoice_by_code("INV-1")).status == "paid"
+    assert (await invoice_by_code("INV-2")).deleted_at is None
+
+
+async def test_reimport_after_rollback_applies_the_corrected_paid_status(
+    client: httpx.AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    wrong = await import_lines(
+        client, admin_headers, line(code="INV-5", status="lunas", paid_at="2026-11-02")
+    )
+    assert (await rollback(client, admin_headers, wrong["id"])).status_code == 200
+
+    corrected = await import_lines(client, admin_headers, line(code="INV-5", status="belum lunas"))
+
+    invoice = await invoice_by_code("INV-5")
+    assert (invoice.deleted_at, invoice.status, invoice.paid_at, invoice.paid_via) == (
+        None,
+        "unpaid",
+        None,
+        None,
+    )
+    assert corrected["summary"]["invoices_skipped"] == 0
+
+
+# --- locking ----------------------------------------------------------------------------------
+
+
+async def test_apply_and_rollback_take_the_import_lock(
+    client: httpx.AsyncClient,
+    admin_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_lock(_db: object) -> None:
+        calls.append("lock")
+
+    monkeypatch.setattr("app.modules.imports.service.lock_imports", fake_lock)
+
+    batch = await import_lines(client, admin_headers, line(code="INV-1"))
+    assert calls == ["lock"]
+    assert (await rollback(client, admin_headers, batch["id"])).status_code == 200
+    assert calls == ["lock", "lock"]

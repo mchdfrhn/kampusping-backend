@@ -105,6 +105,13 @@ changed go back to their previous values; an invoice that returns from paid to u
 `cancelled(paid)` message, and because `(invoice_id, rule_id)` is unique the planner does not plan
 that rule again, so no duplicate and no AB-03 breach.
 
+Re-importing after a rollback treats a restored (soft-deleted) invoice as new: the file decides
+paid or unpaid again, and the student's older unpaid invoices are superseded again, exactly as in
+the first import. Known limitation: a queued reminder that rollback cancelled (`manual`) keeps its
+`(invoice_id, rule_id)` slot, so that rule is not planned again for the restored invoice (later
+rules are). Rollback and apply serialise on a PostgreSQL advisory lock (`imports/locking.py`), and
+rollback row-locks the affected students and invoices while it checks for conflicts.
+
 ## Planner rules (`planner.py`, `repository.py`)
 
 The pass is idempotent: `messages` is unique on (`invoice_id`, `rule_id`), so running it twice, or

@@ -4,10 +4,17 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects import postgresql
 
 from app.db.session import get_session_factory
-from app.modules.imports.rollback import RollbackConflict, RollbackPlan, build_plan, execute_plan
+from app.modules.imports.rollback import (
+    RollbackConflict,
+    RollbackPlan,
+    build_plan,
+    entities_query,
+    execute_plan,
+)
 from app.modules.invoices.model import Invoice
 from app.modules.messages.model import Message
 from app.modules.students.model import Student
@@ -222,3 +229,43 @@ async def test_restored_row_is_reverted_to_deleted(
     restored = await invoice_by_code("INV-1")
     assert restored.deleted_at is not None
     assert restored.deleted_by == "tester"
+
+
+async def test_worker_marking_a_phone_invalid_is_not_a_conflict(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    batch = await import_lines(client, staf_headers, line(nim="2201", code="INV-1"))
+    async with get_session_factory()() as db:
+        student = await db.scalar(select(Student).where(Student.nim == "2201"))
+        assert student is not None
+        student.phone_status = "invalid"  # what the sender does after a "not on WhatsApp" failure
+        await db.commit()
+
+    assert (await _plan(batch["id"])).conflicts == []
+
+
+async def test_a_hard_deleted_row_is_skipped_not_a_conflict(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    batch = await import_lines(
+        client,
+        staf_headers,
+        line(nim="2201", code="INV-1"),
+        line(nim="2202", name="Siti", code="INV-2"),
+    )
+    async with get_session_factory()() as db:
+        await db.execute(delete(Invoice).where(Invoice.invoice_code == "INV-1"))
+        await db.commit()
+
+    plan = await _rollback(batch["id"])
+
+    assert plan.conflicts == []
+    assert (await invoice_by_code("INV-2")).deleted_at is not None
+
+
+def test_locked_entity_query_uses_for_update_on_postgresql() -> None:
+    dialect = postgresql.dialect()
+    assert "FOR UPDATE" in str(entities_query(Invoice, [1, 2], lock=True).compile(dialect=dialect))
+    assert "FOR UPDATE" not in str(
+        entities_query(Invoice, [1, 2], lock=False).compile(dialect=dialect)
+    )

@@ -35,6 +35,7 @@ from .constants import (
     MSG_ROLLBACK_NOT_LATEST,
     ImportStatus,
 )
+from .locking import lock_imports
 from .model import ImportBatch, ImportRowError
 from .parser import ImportFileError, parse_upload, resolve_columns
 from .payload import row_from_json, row_to_json
@@ -157,6 +158,7 @@ class ImportService:
         simultaneous applies exactly one proceeds and the rest get 409. Any failure afterwards
         rolls the claim back together with the data changes.
         """
+        await lock_imports(self.db)
         existing = await self.get(batch_id)
         if existing.status == ImportStatus.PREVIEW.value and not existing.summary.get("rows_valid"):
             raise AppException(MSG_NO_VALID_ROWS, status_code=422, code=VALIDATION_ERROR)
@@ -269,6 +271,7 @@ class ImportService:
         several simultaneous rollbacks exactly one proceeds. Any conflict or failure afterwards
         rolls the claim back together with the data changes: nothing is applied partially.
         """
+        await lock_imports(self.db)  # after this no apply is mid-flight, so "latest" is reliable
         batch = await self._rollbackable(batch_id)
         now = self.clock()
         claimed = await self.batches.claim_applied(
@@ -283,7 +286,7 @@ class ImportService:
         if not claimed:
             raise _conflict(MSG_ROLLBACK_NOT_APPLIED)
 
-        plan = await build_plan(self.db, batch_id)
+        plan = await build_plan(self.db, batch_id, lock=True)
         if plan.conflicts:
             await self.db.rollback()  # releases the claim
             raise _conflict(
