@@ -1,4 +1,5 @@
 import builtins
+import contextlib
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import PureWindowsPath
@@ -232,11 +233,19 @@ class ImportService:
         await self.db.commit()
         return batch
 
-    async def delete(self, batch_id: int, actor: User) -> None:
-        """Delete a non-applied (preview, discarded, or rolled-back) import from history."""
+    async def delete(self, batch_id: int, actor: User, *, force: bool = False) -> None:
+        """Delete an import from history. Applied batches require force=True."""
         batch = await self.get(batch_id)
         if batch.status == ImportStatus.APPLIED.value:
-            raise _conflict(MSG_DELETE_APPLIED_NOT_ALLOWED)
+            if not force:
+                raise _conflict(MSG_DELETE_APPLIED_NOT_ALLOWED)
+            if batch.has_change_log:
+                with contextlib.suppress(Exception):
+                    plan = await build_plan(self.db, batch_id)
+                    await execute_plan(self.db, plan, actor=actor.email, now=self.clock())
+            batch.status = ImportStatus.ROLLED_BACK.value
+            batch.rolled_back_at = self.clock()
+
         batch.rows = None
         await self.batches.soft_delete(batch, actor.email)
         await record_audit(
@@ -245,7 +254,7 @@ class ImportService:
             action=AUDIT_IMPORT_DELETED,
             entity=AUDIT_ENTITY_IMPORT,
             entity_id=batch.id,
-            detail={"file_name": batch.file_name, "status": batch.status},
+            detail={"file_name": batch.file_name, "status": batch.status, "forced": force},
         )
         await self.db.commit()
 

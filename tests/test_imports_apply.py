@@ -492,6 +492,18 @@ async def test_delete_applied_batch_409(
     assert "tidak dapat dihapus" in delete_res.json()["error"]["message"]
 
 
+async def test_force_delete_applied_batch_204(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    applied = await import_lines(client, staf_headers, line())
+    delete_res = await client.delete(
+        f"{IMPORTS_URL}/{applied['id']}?force=true", headers=staf_headers
+    )
+    assert delete_res.status_code == 204
+    res = await client.get(f"{IMPORTS_URL}/{applied['id']}", headers=staf_headers)
+    assert res.status_code == 404
+
+
 async def test_failed_apply_leaves_batch_in_preview_and_changes_nothing(
     client: httpx.AsyncClient,
     staf_headers: dict[str, str],

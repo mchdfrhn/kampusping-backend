@@ -80,10 +80,15 @@ async def discard_import(
 @router.delete(
     "/{batch_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a non-applied import from history",
+    summary="Delete an import from history",
 )
-async def delete_import(batch_id: int, db: DbSession, actor: CanCreate) -> Response:
-    await ImportService(db).delete(batch_id, actor)
+async def delete_import(
+    batch_id: int,
+    db: DbSession,
+    actor: CanCreate,
+    force: Annotated[bool, Query(description="Force delete an applied batch")] = False,
+) -> Response:
+    await ImportService(db).delete(batch_id, actor, force=force)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
