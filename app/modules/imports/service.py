@@ -1,16 +1,21 @@
 import builtins
-import contextlib
+import logging
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import PureWindowsPath
 from typing import Literal
 
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.constants import CONFLICT, NOT_FOUND, VALIDATION_ERROR
 from app.core.exceptions import AppException
 from app.modules.audit.service import record_audit
+from app.modules.invoices.model import Invoice
+from app.modules.messages.constants import CancelReason, MessageStatus
+from app.modules.messages.model import Message
+from app.modules.students.model import Student
 from app.modules.users.model import User
 from app.shared.clock import Clock, local_today
 from app.shared.pagination import ListParams
@@ -46,6 +51,8 @@ from .preview import build_preview
 from .repository import ImportBatchRepository, ImportRowErrorRepository
 from .rollback import RollbackPlan, build_plan, execute_plan
 from .schema import ImportBatchRead, RollbackConflictRead, RollbackPreview
+
+logger = logging.getLogger(__name__)
 
 
 def safe_file_name(filename: str) -> str:
@@ -234,17 +241,94 @@ class ImportService:
         return batch
 
     async def delete(self, batch_id: int, actor: User, *, force: bool = False) -> None:
-        """Delete an import from history. Applied batches require force=True."""
+        """Permanently remove a preview, discarded, or rolled-back batch and its rows.
+
+        If force=True, even an applied batch can be removed (attempting best-effort rollback
+        if change logs or timestamps exist).
+        """
         batch = await self.get(batch_id)
         if batch.status == ImportStatus.APPLIED.value:
             if not force:
                 raise _conflict(MSG_DELETE_APPLIED_NOT_ALLOWED)
             if batch.has_change_log:
-                with contextlib.suppress(Exception):
-                    plan = await build_plan(self.db, batch_id)
-                    await execute_plan(self.db, plan, actor=actor.email, now=self.clock())
-            batch.status = ImportStatus.ROLLED_BACK.value
-            batch.rolled_back_at = self.clock()
+                try:
+                    async with self.db.begin_nested():
+                        plan = await build_plan(self.db, batch_id)
+                        await execute_plan(self.db, plan, actor=actor.email, now=self.clock())
+                    batch.rolled_back_at = self.clock()
+                except Exception as exc:
+                    logger.warning("Rollback during delete failed for batch %s: %s", batch_id, exc)
+            elif batch.applied_at is not None:
+                try:
+                    now = self.clock()
+                    async with self.db.begin_nested():
+                        inv_ids = list(
+                            await self.db.scalars(
+                                select(Invoice.id).where(
+                                    Invoice.created_at == batch.applied_at,
+                                    Invoice.deleted_at.is_(None),
+                                )
+                            )
+                        )
+                        if inv_ids:
+                            await self.db.execute(
+                                update(Invoice)
+                                .where(Invoice.id.in_(inv_ids))
+                                .values(
+                                    deleted_at=now,
+                                    deleted_by=actor.email,
+                                    updated_by=actor.email,
+                                    updated_at=now,
+                                )
+                            )
+                            await self.db.execute(
+                                update(Message)
+                                .where(
+                                    Message.invoice_id.in_(inv_ids),
+                                    Message.status == MessageStatus.QUEUED.value,
+                                )
+                                .values(
+                                    status=MessageStatus.CANCELLED.value,
+                                    cancel_reason=CancelReason.MANUAL.value,
+                                    error="Impor dihapus",
+                                    updated_by=actor.email,
+                                    updated_at=now,
+                                )
+                            )
+                        std_ids = list(
+                            await self.db.scalars(
+                                select(Student.id).where(
+                                    Student.created_at == batch.applied_at,
+                                    Student.deleted_at.is_(None),
+                                )
+                            )
+                        )
+                        if std_ids:
+                            active_student_ids = set(
+                                await self.db.scalars(
+                                    select(Invoice.student_id).where(
+                                        Invoice.student_id.in_(std_ids),
+                                        Invoice.deleted_at.is_(None),
+                                    )
+                                )
+                            )
+                            safe_std_ids = [s for s in std_ids if s not in active_student_ids]
+                            if safe_std_ids:
+                                await self.db.execute(
+                                    update(Student)
+                                    .where(Student.id.in_(safe_std_ids))
+                                    .values(
+                                        deleted_at=now,
+                                        deleted_by=actor.email,
+                                        updated_by=actor.email,
+                                        updated_at=now,
+                                    )
+                                )
+                    batch.rolled_back_at = self.clock()
+                except Exception as exc:
+                    logger.warning(
+                        "Legacy rollback during delete failed for batch %s: %s", batch_id, exc
+                    )
 
         batch.rows = None
         await self.batches.soft_delete(batch, actor.email)

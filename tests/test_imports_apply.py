@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.exceptions import AppException
@@ -500,6 +500,52 @@ async def test_force_delete_applied_batch_204(
         f"{IMPORTS_URL}/{applied['id']}?force=true", headers=staf_headers
     )
     assert delete_res.status_code == 204
+    res = await client.get(f"{IMPORTS_URL}/{applied['id']}", headers=staf_headers)
+    assert res.status_code == 404
+
+
+async def test_force_delete_applied_batch_legacy_no_change_log(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    applied = await import_lines(client, staf_headers, line(code="INV-LEGACY"))
+    async with get_session_factory()() as db:
+        await db.execute(
+            update(ImportBatch)
+            .where(ImportBatch.id == applied["id"])
+            .values(has_change_log=False)
+        )
+        await db.commit()
+
+    delete_res = await client.delete(
+        f"{IMPORTS_URL}/{applied['id']}?force=true", headers=staf_headers
+    )
+    assert delete_res.status_code == 204
+    res = await client.get(f"{IMPORTS_URL}/{applied['id']}", headers=staf_headers)
+    assert res.status_code == 404
+
+    async with get_session_factory()() as db:
+        inv = await db.scalar(select(Invoice).where(Invoice.invoice_code == "INV-LEGACY"))
+        assert inv is not None
+        assert inv.deleted_at is not None
+
+
+async def test_force_delete_suppresses_rollback_errors_and_deletes_batch(
+    client: httpx.AsyncClient,
+    staf_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applied = await import_lines(client, staf_headers, line(code="INV-ERR"))
+
+    async def failing_execute(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("database lock timeout or simulated failure")
+
+    with monkeypatch.context() as patched:
+        patched.setattr("app.modules.imports.service.execute_plan", failing_execute)
+        delete_res = await client.delete(
+            f"{IMPORTS_URL}/{applied['id']}?force=true", headers=staf_headers
+        )
+        assert delete_res.status_code == 204
+
     res = await client.get(f"{IMPORTS_URL}/{applied['id']}", headers=staf_headers)
     assert res.status_code == 404
 

@@ -1,9 +1,11 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 
 from app.api.deps import ClockDep, DbSession, require_permissions
 from app.core.constants import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from app.core.exceptions import AppException
 from app.core.permissions import IMPORTS_CREATE, IMPORTS_READ, IMPORTS_ROLLBACK
 from app.modules.invoices.constants import InvoiceSource
 from app.modules.users.model import User
@@ -13,6 +15,8 @@ from .parser import MAX_FILE_BYTES
 from .schema import ImportBatchRead, ImportRowErrorRead, RollbackPreview
 from .service import ImportService
 from .validation import SEMESTER_MAX
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/imports", tags=["Imports"])
 
@@ -88,8 +92,14 @@ async def delete_import(
     actor: CanCreate,
     force: Annotated[bool, Query(description="Force delete an applied batch")] = False,
 ) -> Response:
-    await ImportService(db).delete(batch_id, actor, force=force)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    try:
+        await ImportService(db).delete(batch_id, actor, force=force)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except AppException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error deleting import batch %s: %s", batch_id, exc)
+        raise
 
 
 @router.post(

@@ -28,7 +28,7 @@ class ImportBatch(AuditedModel):
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     semester: Mapped[str | None] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(
-        String(10), nullable=False, default=ImportStatus.PREVIEW.value, index=True
+        String(20), nullable=False, default=ImportStatus.PREVIEW.value, index=True
     )
     summary: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
     # Validated rows kept between preview and apply; SQL NULL once applied or discarded. Deferred
