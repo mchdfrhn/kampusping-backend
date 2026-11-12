@@ -22,6 +22,7 @@ AUDIT_IMPORT_PREVIEWED = "import.previewed"
 AUDIT_IMPORT_APPLIED = "import.applied"
 AUDIT_IMPORT_DISCARDED = "import.discarded"
 AUDIT_IMPORT_ROLLED_BACK = "import.rolled_back"
+AUDIT_IMPORT_DELETED = "import.deleted"
 AUDIT_ENTITY_IMPORT = "import_batch"
 
 SUMMARY_KEYS = (
@@ -55,6 +56,9 @@ MSG_ROLLBACK_NO_LOG = "Impor ini diterapkan sebelum fitur rollback ada dan tidak
 MSG_ROLLBACK_NOT_LATEST = "Batalkan impor yang lebih baru lebih dulu."
 MSG_ROLLBACK_CONFLICT = (
     "Data berubah sejak impor diterapkan, sehingga impor tidak dapat dibatalkan."
+)
+MSG_DELETE_APPLIED_NOT_ALLOWED = (
+    "Impor berstatus Diterapkan tidak dapat dihapus. Batalkan impor (rollback) terlebih dahulu."
 )
 # Conflicts listed in a response; ``conflicts_total`` always carries the full count.
 MAX_REPORTED_CONFLICTS = 50

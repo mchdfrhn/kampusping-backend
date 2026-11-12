@@ -20,6 +20,7 @@ from .changes import ChangeRecorder
 from .constants import (
     AUDIT_ENTITY_IMPORT,
     AUDIT_IMPORT_APPLIED,
+    AUDIT_IMPORT_DELETED,
     AUDIT_IMPORT_DISCARDED,
     AUDIT_IMPORT_PREVIEWED,
     AUDIT_IMPORT_ROLLED_BACK,
@@ -28,6 +29,7 @@ from .constants import (
     MAX_STORED_ISSUES,
     MSG_BATCH_NOT_FOUND,
     MSG_BATCH_NOT_PREVIEW,
+    MSG_DELETE_APPLIED_NOT_ALLOWED,
     MSG_NO_VALID_ROWS,
     MSG_ROLLBACK_CONFLICT,
     MSG_ROLLBACK_NO_LOG,
@@ -229,6 +231,23 @@ class ImportService:
         )
         await self.db.commit()
         return batch
+
+    async def delete(self, batch_id: int, actor: User) -> None:
+        """Delete a non-applied (preview, discarded, or rolled-back) import from history."""
+        batch = await self.get(batch_id)
+        if batch.status == ImportStatus.APPLIED.value:
+            raise _conflict(MSG_DELETE_APPLIED_NOT_ALLOWED)
+        batch.rows = None
+        await self.batches.soft_delete(batch, actor.email)
+        await record_audit(
+            self.db,
+            actor=actor.email,
+            action=AUDIT_IMPORT_DELETED,
+            entity=AUDIT_ENTITY_IMPORT,
+            entity_id=batch.id,
+            detail={"file_name": batch.file_name, "status": batch.status},
+        )
+        await self.db.commit()
 
     async def read_models(self, batches: Sequence[ImportBatch]) -> builtins.list[ImportBatchRead]:
         """Read schemas with ``rollback_block`` filled (one extra query for the whole page)."""

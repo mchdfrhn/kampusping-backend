@@ -307,6 +307,7 @@ async def test_imports_require_authentication(client: httpx.AsyncClient) -> None
         ("GET", f"{IMPORTS_URL}/1/errors"),
         ("POST", f"{IMPORTS_URL}/1/apply"),
         ("POST", f"{IMPORTS_URL}/1/discard"),
+        ("DELETE", f"{IMPORTS_URL}/1"),
     ]:
         assert (await client.request(method, url)).status_code == 401, (method, url)
     response = await client.post(
@@ -331,6 +332,9 @@ async def test_pimpinan_cannot_use_imports(
     assert (await apply(client, pimpinan_headers, batch["id"])).status_code == 403
     assert (
         await client.post(f"{IMPORTS_URL}/{batch['id']}/discard", headers=pimpinan_headers)
+    ).status_code == 403
+    assert (
+        await client.delete(f"{IMPORTS_URL}/{batch['id']}", headers=pimpinan_headers)
     ).status_code == 403
     assert await count(Student) == 0
 

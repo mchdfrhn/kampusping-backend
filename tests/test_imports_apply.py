@@ -449,6 +449,47 @@ async def test_apply_and_discard_unknown_batch_404(
     ).status_code == 404
     assert (await client.get(f"{IMPORTS_URL}/999", headers=staf_headers)).status_code == 404
     assert (await client.get(f"{IMPORTS_URL}/999/errors", headers=staf_headers)).status_code == 404
+    assert (await client.delete(f"{IMPORTS_URL}/999", headers=staf_headers)).status_code == 404
+
+
+async def test_delete_preview_batch_204(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    batch = await preview(client, staf_headers, line())
+    delete_res = await client.delete(f"{IMPORTS_URL}/{batch['id']}", headers=staf_headers)
+    assert delete_res.status_code == 204
+
+    # Disappears from single GET and listing
+    res = await client.get(f"{IMPORTS_URL}/{batch['id']}", headers=staf_headers)
+    assert res.status_code == 404
+    history = (await client.get(IMPORTS_URL, headers=staf_headers)).json()
+    assert not any(item["id"] == batch["id"] for item in history["items"])
+
+    # Audit event recorded
+    events = await audit_events("import.deleted")
+    assert len(events) == 1
+    assert events[0].entity_id == str(batch["id"])
+
+
+async def test_delete_discarded_batch_204(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    batch = await preview(client, staf_headers, line())
+    await client.post(f"{IMPORTS_URL}/{batch['id']}/discard", headers=staf_headers)
+
+    delete_res = await client.delete(f"{IMPORTS_URL}/{batch['id']}", headers=staf_headers)
+    assert delete_res.status_code == 204
+    res = await client.get(f"{IMPORTS_URL}/{batch['id']}", headers=staf_headers)
+    assert res.status_code == 404
+
+
+async def test_delete_applied_batch_409(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    applied = await import_lines(client, staf_headers, line())
+    delete_res = await client.delete(f"{IMPORTS_URL}/{applied['id']}", headers=staf_headers)
+    assert delete_res.status_code == 409
+    assert "tidak dapat dihapus" in delete_res.json()["error"]["message"]
 
 
 async def test_failed_apply_leaves_batch_in_preview_and_changes_nothing(

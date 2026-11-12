@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 
 from app.api.deps import ClockDep, DbSession, require_permissions
 from app.core.constants import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
@@ -75,6 +75,16 @@ async def discard_import(
     batch_id: int, db: DbSession, actor: CanCreate, clock: ClockDep
 ) -> ImportBatchRead:
     return ImportBatchRead.model_validate(await ImportService(db, clock).discard(batch_id, actor))
+
+
+@router.delete(
+    "/{batch_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a non-applied import from history",
+)
+async def delete_import(batch_id: int, db: DbSession, actor: CanCreate) -> Response:
+    await ImportService(db).delete(batch_id, actor)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
