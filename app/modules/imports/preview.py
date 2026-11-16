@@ -60,10 +60,13 @@ async def build_preview(
     issues = sorted([*issues, *cross_issues], key=lambda issue: issue.row_number)
 
     imported_codes = {row.invoice_code for row in accepted}
+    # A rekap lists arrears only: a new invoice says nothing about the student's older ones.
     students_with_new_invoice = [
         students[row.nim].id
         for row in accepted
-        if row.invoice_code not in invoices and row.nim in students
+        if sheet.kind != ImportKind.REKAP
+        and row.invoice_code not in invoices
+        and row.nim in students
     ]
     superseded = await unpaid_invoices_for_students(
         db,

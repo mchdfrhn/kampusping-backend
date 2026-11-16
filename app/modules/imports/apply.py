@@ -120,6 +120,9 @@ async def apply_rows(
 ) -> dict[str, int]:
     """Upsert students by NIM, then invoices by code; returns the actual counts.
 
+    ``kind`` is the batch kind: for a rekap there is no supersede rule and an existing invoice keeps
+    its due date.
+
     An invoice that is already paid keeps its status, ``paid_at`` and ``paid_via``; an unpaid row
     against it only updates the other fields and counts as skipped. When an existing student
     receives a new invoice code in the file, any previous unpaid invoices of that student that are
@@ -137,10 +140,12 @@ async def apply_rows(
     imported_codes = {row.invoice_code for row in rows}
     # An invoice restored from the soft-deleted state (e.g. after a rollback) starts over like a
     # new one, so it supersedes the student's older unpaid invoices exactly as the first import did.
+    # A rekap lists arrears only, so a new invoice never settles the student's older ones.
     students_with_new_invoice = [
         students[row.nim].id
         for row in rows
-        if row.nim in students
+        if kind != ImportKind.REKAP
+        and row.nim in students
         and (row.invoice_code not in invoices or invoices[row.invoice_code].deleted_at is not None)
     ]
     superseded_invoices = await unpaid_invoices_for_students(
@@ -212,7 +217,8 @@ async def apply_rows(
             changed = _set(invoice, "paid_at", None) or changed
             changed = _set(invoice, "paid_via", None) or changed
         changed = _set(invoice, "amount", row.amount) or changed
-        changed = _set(invoice, "due_date", row.due_date) or changed
+        if kind != ImportKind.REKAP or restoring:  # a rekap has no real due date: keep the first
+            changed = _set(invoice, "due_date", row.due_date) or changed
         changed = _set(invoice, "semester", row.semester) or changed
         changed = _set(invoice, "source", source) or changed
         if row.status == InvoiceStatus.PAID.value and invoice.status != InvoiceStatus.PAID.value:

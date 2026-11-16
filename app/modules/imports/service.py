@@ -41,6 +41,7 @@ from .constants import (
     MSG_ROLLBACK_NO_LOG,
     MSG_ROLLBACK_NOT_APPLIED,
     MSG_ROLLBACK_NOT_LATEST,
+    ImportKind,
     ImportStatus,
 )
 from .locking import lock_imports
@@ -200,6 +201,7 @@ class ImportService:
             now=now,
             today=local_today(now, settings.app_timezone),
             recorder=recorder,
+            kind=ImportKind(batch.kind),
         )
         self.db.add_all(recorder.build(batch_id=batch.id, actor=actor.email, now=now))
         batch.has_change_log = True
