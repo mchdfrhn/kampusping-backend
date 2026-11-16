@@ -510,9 +510,7 @@ async def test_force_delete_applied_batch_legacy_no_change_log(
     applied = await import_lines(client, staf_headers, line(code="INV-LEGACY"))
     async with get_session_factory()() as db:
         await db.execute(
-            update(ImportBatch)
-            .where(ImportBatch.id == applied["id"])
-            .values(has_change_log=False)
+            update(ImportBatch).where(ImportBatch.id == applied["id"]).values(has_change_log=False)
         )
         await db.commit()
 

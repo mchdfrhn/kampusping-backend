@@ -29,6 +29,8 @@ class MessageSummary(BaseModel):
 class WarningsSummary(BaseModel):
     paused_reason: str | None
     auto_send_enabled: bool
+    worker_alive: bool = False
+    worker_last_seen_at: datetime | None = None
 
 
 class DashboardSummary(BaseModel):

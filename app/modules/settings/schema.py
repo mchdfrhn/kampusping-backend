@@ -10,7 +10,10 @@ from pydantic import (
     field_validator,
 )
 
-from .constants import MAX_ATTEMPTS_LIMIT
+from app.core.config import settings as config
+
+from .constants import MAX_ATTEMPTS_LIMIT, worker_is_alive
+from .model import AppSettings
 
 CampusName = Annotated[str, StringConstraints(strip_whitespace=True, max_length=150)]
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)]
@@ -89,8 +92,19 @@ class SettingsRead(SettingsWrite):
     paused_reason: str | None
     consecutive_failures: int
     updated_at: datetime
+    worker_last_seen_at: datetime | None = None
+    worker_alive: bool = False
 
     @field_validator("working_days", mode="before")
     @classmethod
     def working_days_from_column(cls, value: Any) -> Any:
         return parse_working_days(value) if isinstance(value, str) else value
+
+    @classmethod
+    def from_settings(cls, row: AppSettings, *, now: datetime) -> "SettingsRead":
+        """Build a settings response including computed ``worker_alive`` relative to ``now``."""
+        read = cls.model_validate(row)
+        read.worker_alive = worker_is_alive(
+            row.worker_last_seen_at, now=now, tick_seconds=config.worker_tick_seconds
+        )
+        return read

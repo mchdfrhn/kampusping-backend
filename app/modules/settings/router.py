@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import DbSession, require_permissions
+from app.api.deps import ClockDep, DbSession, require_permissions
 from app.core.permissions import SETTINGS_READ, SETTINGS_UPDATE
 from app.modules.users.model import User
 
@@ -16,17 +16,19 @@ CanUpdate = Annotated[User, Depends(require_permissions(SETTINGS_UPDATE))]
 
 
 @router.get("", response_model=SettingsRead, summary="Get application settings")
-async def get_settings(db: DbSession, _: CanRead) -> SettingsRead:
+async def get_settings(db: DbSession, _: CanRead, clock: ClockDep) -> SettingsRead:
     row = await SettingsService(db).get()
     await db.commit()  # persists the default row when it was just created
-    return SettingsRead.model_validate(row)
+    return SettingsRead.from_settings(row, now=clock())
 
 
 @router.put("", response_model=SettingsRead, summary="Update application settings")
-async def update_settings(payload: SettingsWrite, db: DbSession, actor: CanUpdate) -> SettingsRead:
-    return SettingsRead.model_validate(await SettingsService(db).update(payload, actor))
+async def update_settings(
+    payload: SettingsWrite, db: DbSession, actor: CanUpdate, clock: ClockDep
+) -> SettingsRead:
+    return SettingsRead.from_settings(await SettingsService(db).update(payload, actor), now=clock())
 
 
 @router.post("/resume", response_model=SettingsRead, summary="Resume automatic sending")
-async def resume_sending(db: DbSession, actor: CanUpdate) -> SettingsRead:
-    return SettingsRead.model_validate(await SettingsService(db).resume(actor))
+async def resume_sending(db: DbSession, actor: CanUpdate, clock: ClockDep) -> SettingsRead:
+    return SettingsRead.from_settings(await SettingsService(db).resume(actor), now=clock())

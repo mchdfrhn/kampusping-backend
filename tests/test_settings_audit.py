@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -37,6 +37,8 @@ async def test_get_settings_returns_defaults(
     assert body["consecutive_failure_limit"] == 5
     assert body["escalation_offset_days"] == 14
     assert body["paused_reason"] is None
+    assert body["worker_alive"] is False
+    assert body["worker_last_seen_at"] is None
 
 
 def valid_payload(**overrides: Any) -> dict[str, Any]:
@@ -366,3 +368,16 @@ def test_production_gateway_requires_both_secrets() -> None:
     assert ok.wa_provider == "gateway"
     # The fake provider needs no secrets, even in production.
     assert Settings(**{**base, "wa_provider": "fake"}).wa_provider == "fake"
+
+
+async def test_settings_reports_worker_alive_when_heartbeat_is_recent(
+    client: httpx.AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    async with get_session_factory()() as db:
+        svc = SettingsService(db)
+        await svc.touch_worker_heartbeat(now=datetime.now(UTC) - timedelta(seconds=20))
+        await db.commit()
+
+    body = (await client.get(SETTINGS_URL, headers=admin_headers)).json()
+    assert body["worker_alive"] is True
+    assert body["worker_last_seen_at"] is not None

@@ -20,7 +20,7 @@ from app.modules.whatsapp.provider import WhatsAppProvider
 from app.shared.clock import Clock
 
 from .planner import PlanReport, plan_messages
-from .sender import run_send_phase
+from .sender import record_worker_heartbeat, run_send_phase
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ async def run_tick(
     jitter: Jitter,
 ) -> TickReport:
     """One planning pass and one send phase. Never raises on an ordinary error."""
+    await record_worker_heartbeat(session_factory, clock=clock)
     plan: PlanReport | None = None
     try:
         async with session_factory() as db:
@@ -80,6 +81,7 @@ async def run_tick(
         send_failed = True
         logger.exception("Worker tick: the send phase failed")
 
+    await record_worker_heartbeat(session_factory, clock=clock)
     report = TickReport(plan=plan, handled=handled, send_failed=send_failed)
     logger.info("Worker tick: %s", report.summary())
     return report

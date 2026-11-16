@@ -1,11 +1,13 @@
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.audit.service import record_audit
 from app.modules.users.model import User
+from app.shared.clock import as_utc
 from app.shared.utils import utc_now
 
 from .constants import (
@@ -89,3 +91,13 @@ class SettingsService:
         )
         await self.db.commit()
         return row
+
+    async def touch_worker_heartbeat(self, *, now: datetime) -> None:
+        """Record the worker's latest heartbeat without altering admin ``updated_at``."""
+        await self.get()
+        await self.db.execute(
+            update(AppSettings)
+            .where(AppSettings.id == SETTINGS_ROW_ID)
+            .values(worker_last_seen_at=as_utc(now), updated_at=AppSettings.updated_at)
+            .execution_options(synchronize_session=False)
+        )

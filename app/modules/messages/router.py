@@ -98,7 +98,5 @@ async def cancel_message(
 
 
 @router.delete("/{message_id}", status_code=204, summary="Delete a removable message")
-async def delete_message(
-    message_id: int, db: DbSession, actor: CanCancel, clock: ClockDep
-) -> None:
+async def delete_message(message_id: int, db: DbSession, actor: CanCancel, clock: ClockDep) -> None:
     await MessageService(db, clock).delete(message_id, actor)

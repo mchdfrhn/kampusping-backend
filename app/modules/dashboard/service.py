@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +8,7 @@ from app.modules.invoices.constants import InvoiceStatus
 from app.modules.invoices.model import Invoice
 from app.modules.messages.constants import MessageStatus
 from app.modules.messages.model import Message
+from app.modules.settings.constants import worker_is_alive
 from app.modules.settings.service import SettingsService
 from app.modules.students.model import Student
 from app.shared.clock import Clock, as_utc, local_today
@@ -28,7 +29,7 @@ class DashboardService:
         return DashboardSummary(
             invoices=await self._invoices(semester, today),
             messages=await self._messages(semester),
-            warnings=await self._warnings(),
+            warnings=await self._warnings(now=now),
             semester=semester,
             generated_at=as_utc(now),
         )
@@ -84,9 +85,16 @@ class DashboardService:
             **{status.value: counts.get(status.value, 0) for status in MessageStatus}
         )
 
-    async def _warnings(self) -> WarningsSummary:
+    async def _warnings(self, *, now: datetime) -> WarningsSummary:
         row = await SettingsService(self.db).get()
         await self.db.commit()  # persists the default settings row when it was just created
         return WarningsSummary(
-            paused_reason=row.paused_reason, auto_send_enabled=row.auto_send_enabled
+            paused_reason=row.paused_reason,
+            auto_send_enabled=row.auto_send_enabled,
+            worker_alive=worker_is_alive(
+                row.worker_last_seen_at,
+                now=now,
+                tick_seconds=settings.worker_tick_seconds,
+            ),
+            worker_last_seen_at=row.worker_last_seen_at,
         )

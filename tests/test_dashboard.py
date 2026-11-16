@@ -44,7 +44,7 @@ INVOICE_KEYS = {
 }
 MESSAGE_KEYS = {"queued", "sending", "sent", "delivered", "read", "failed", "cancelled"}
 TOP_KEYS = {"invoices", "messages", "warnings", "semester", "generated_at"}
-WARNING_KEYS = {"paused_reason", "auto_send_enabled"}
+WARNING_KEYS = {"paused_reason", "auto_send_enabled", "worker_alive", "worker_last_seen_at"}
 
 
 def freeze(app: FastAPI, now: datetime = NOW) -> None:
@@ -211,7 +211,12 @@ async def test_counts_and_amounts_across_all_semesters(
         "failed": 3,
         "cancelled": 1,
     }
-    assert body["warnings"] == {"paused_reason": None, "auto_send_enabled": False}
+    assert body["warnings"] == {
+        "paused_reason": None,
+        "auto_send_enabled": False,
+        "worker_alive": False,
+        "worker_last_seen_at": None,
+    }
     assert datetime.fromisoformat(body["generated_at"]) == NOW
 
 
@@ -283,7 +288,12 @@ async def test_empty_database_yields_zeros_never_null(
 
     assert body["invoices"] == dict.fromkeys(INVOICE_KEYS, 0)
     assert body["messages"] == dict.fromkeys(MESSAGE_KEYS, 0)
-    assert body["warnings"] == {"paused_reason": None, "auto_send_enabled": False}
+    assert body["warnings"] == {
+        "paused_reason": None,
+        "auto_send_enabled": False,
+        "worker_alive": False,
+        "worker_last_seen_at": None,
+    }
 
 
 async def test_warnings_reflect_the_settings(
@@ -295,7 +305,12 @@ async def test_warnings_reflect_the_settings(
 
     body = await summary(client, staf_headers)
 
-    assert body["warnings"] == {"paused_reason": "circuit_breaker", "auto_send_enabled": True}
+    assert body["warnings"] == {
+        "paused_reason": "circuit_breaker",
+        "auto_send_enabled": True,
+        "worker_alive": False,
+        "worker_last_seen_at": None,
+    }
 
 
 async def test_summary_is_repeatable(
@@ -470,3 +485,30 @@ async def test_summary_uses_a_handful_of_statements_for_hundreds_of_rows(
     assert sum(body["messages"].values()) == count // 2
     # Authentication needs a few statements of its own; the summary adds a handful more.
     assert len(statements) <= 12, f"{len(statements)} statements for {count} rows"
+
+
+async def test_dashboard_reports_worker_alive_from_heartbeat(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    initial = (await client.get(URL, headers=staf_headers)).json()
+    assert initial["warnings"]["worker_alive"] is False
+    assert initial["warnings"]["worker_last_seen_at"] is None
+
+    async with get_session_factory()() as db:
+        row = await db.get(AppSettings, 1)
+        assert row is not None
+        row.worker_last_seen_at = NOW - timedelta(seconds=30)
+        await db.commit()
+
+    alive = (await client.get(URL, headers=staf_headers)).json()
+    assert alive["warnings"]["worker_alive"] is True
+    assert alive["warnings"]["worker_last_seen_at"] is not None
+
+    async with get_session_factory()() as db:
+        row = await db.get(AppSettings, 1)
+        assert row is not None
+        row.worker_last_seen_at = NOW - timedelta(minutes=10)
+        await db.commit()
+
+    stale = (await client.get(URL, headers=staf_headers)).json()
+    assert stale["warnings"]["worker_alive"] is False

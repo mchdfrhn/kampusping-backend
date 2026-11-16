@@ -41,4 +41,3 @@ def test_extract_invoice_codes_missing_column() -> None:
     content = b"nama,prodi\nBudi,Informatika\n"
     with pytest.raises(Exception, match="Kolom kode tagihan tidak ditemukan"):
         extract_invoice_codes_from_file("test.csv", content)
-

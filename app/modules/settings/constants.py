@@ -1,4 +1,6 @@
-from datetime import time
+from datetime import datetime, time, timedelta
+
+from app.shared.utils import ensure_utc
 
 SETTINGS_ROW_ID = 1
 
@@ -18,3 +20,11 @@ MAX_ATTEMPTS_LIMIT = 10
 AUDIT_SETTINGS_UPDATED = "settings.updated"
 AUDIT_SETTINGS_RESUMED = "settings.resumed"
 AUDIT_ENTITY_SETTINGS = "settings"
+
+
+def worker_is_alive(last_seen_at: datetime | None, *, now: datetime, tick_seconds: int) -> bool:
+    """True when the worker recorded a heartbeat recently enough to be considered running."""
+    if last_seen_at is None:
+        return False
+    stale_after = timedelta(seconds=max(tick_seconds * 2 + 30, 150))
+    return (ensure_utc(now) - ensure_utc(last_seen_at)) <= stale_after

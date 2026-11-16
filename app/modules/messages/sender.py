@@ -99,6 +99,16 @@ async def send_next(
     return step.outcome
 
 
+async def record_worker_heartbeat(session_factory: SessionFactory, *, clock: Clock) -> None:
+    """Persist the worker's latest heartbeat timestamp without letting DB errors kill the loop."""
+    try:
+        async with session_factory() as db:
+            await SettingsService(db).touch_worker_heartbeat(now=clock())
+            await db.commit()
+    except Exception:
+        logger.exception("Worker: recording heartbeat failed")
+
+
 async def run_send_phase(
     session_factory: SessionFactory,
     provider: WhatsAppProvider,
@@ -126,6 +136,8 @@ async def run_send_phase(
         if step.outcome == "idle":
             return handled
         handled += 1
+        if step.called_provider:
+            await record_worker_heartbeat(session_factory, clock=clock)
         if step.stop:
             return handled
 

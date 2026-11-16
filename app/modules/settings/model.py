@@ -1,6 +1,6 @@
-from datetime import time
+from datetime import datetime, time
 
-from sqlalchemy import Boolean, Integer, String, Time
+from sqlalchemy import Boolean, DateTime, Integer, String, Time
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import AuditedModel
@@ -55,3 +55,5 @@ class AppSettings(AuditedModel):
     paused_reason: Mapped[str | None] = mapped_column(String(500))
     # Internal circuit-breaker counter; not editable through the API.
     consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Heartbeat stamped by the worker on each tick/send step; not editable through the API.
+    worker_last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

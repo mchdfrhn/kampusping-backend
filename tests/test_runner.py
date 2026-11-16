@@ -22,6 +22,7 @@ from app.modules.settings.service import SettingsService
 from app.modules.students.model import Student
 from app.modules.templates.model import MessageTemplate
 from app.modules.whatsapp.fake import FakeProvider
+from app.shared.utils import ensure_utc
 
 # Monday 16 November 2026, 10:00 in Jakarta (UTC+7): inside the default send window.
 NOW = datetime(2026, 11, 16, 3, 0, tzinfo=UTC)
@@ -389,3 +390,20 @@ async def test_provider_cache_is_reset_even_if_aclose_fails(
         await cli.run_worker_command(once=True)
 
     assert resets == [1]
+
+
+@pytest.mark.usefixtures("file_database")
+async def test_run_worker_command_records_worker_heartbeat() -> None:
+    async with cli.get_session_factory()() as db:
+        before = await SettingsService(db).get()
+        assert before.worker_last_seen_at is None
+        updated_at_before = before.updated_at
+        await db.commit()
+
+    _, code = await cli.run_worker_command(once=True)
+    assert code == 0
+
+    async with cli.get_session_factory()() as db:
+        after = await SettingsService(db).get()
+        assert after.worker_last_seen_at is not None
+        assert ensure_utc(after.updated_at) == ensure_utc(updated_at_before)
