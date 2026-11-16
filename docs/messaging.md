@@ -112,6 +112,24 @@ the first import. Known limitation: a queued reminder that rollback cancelled (`
 rules are). Rollback and apply serialise on a PostgreSQL advisory lock (`imports/locking.py`), and
 rollback row-locks the affected students and invoices while it checks for conflicts.
 
+### Rekap Tunggakan imports and "paid by absence"
+
+SIAKAD's "Rekap Tunggakan" lists only students who still owe, so a student who paid is simply
+missing from the next file (`ImportKind.REKAP`, detected in `imports/parser.py`; invoice codes are
+generated as `TGK-{nim}-{semester}`). Differences from a standard import, all in `imports/`:
+
+- No supersede rule: a new invoice never settles the student's older ones, and an existing
+  invoice keeps its first due date (the report has none; the import day is used for new ones).
+- An open `TGK-` invoice of a semester present in the file that is absent from it is **suspected
+  paid** (`absent.py`), listed in the preview (`details`, `GET /imports/{id}/details`) and marked
+  paid only for the ids staff send in `mark_paid_invoice_ids` on apply (`paid_via` = batch source,
+  `paid_at` = today in `APP_TIMEZONE`, queued messages `cancelled(paid)`, logged for rollback).
+  More than 30% of a semester's open invoices vanishing at once sets `summary.incomplete_warning`
+  and the preview selects nothing by default. Paid stays sticky: an invoice marked paid by mistake
+  is reopened only by Rollback Impor (latest import) or by editing it in Tagihan.
+- `invoices_updated` counts only invoices that really change (`diff.py`, shared by preview and
+  apply); the rest are `invoices_unchanged`.
+
 ## Planner rules (`planner.py`, `repository.py`)
 
 The pass is idempotent: `messages` is unique on (`invoice_id`, `rule_id`), so running it twice, or
