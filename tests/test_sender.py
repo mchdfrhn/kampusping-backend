@@ -280,6 +280,18 @@ async def test_nothing_sent_when_auto_send_disabled() -> None:
     assert (await get_message(message_id)).status == "queued"
 
 
+async def test_manual_message_still_sends_when_auto_send_disabled() -> None:
+    await configure(auto_send_enabled=False)
+    auto_id = await queued_message()
+    manual_id = await queued_message(kind="manual")
+    fake = FakeProvider()
+
+    assert await run(fake) == 1
+    assert len(fake.sent) == 1
+    assert (await get_message(auto_id)).status == "queued"
+    assert (await get_message(manual_id)).status == "sent"
+
+
 @pytest.mark.parametrize(
     ("now", "expect_sent"),
     [

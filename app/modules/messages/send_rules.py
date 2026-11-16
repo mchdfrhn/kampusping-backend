@@ -77,13 +77,18 @@ def local_day(local: datetime) -> tuple[datetime, datetime]:
     return start.astimezone(UTC), end.astimezone(UTC)
 
 
-def schedule_open(settings: SendSettings, local: datetime) -> bool:
-    """Auto send on, not paused, a working day and inside ``[window_start, window_end)``."""
-    if not settings.auto_send_enabled or settings.paused:
+def window_open(settings: SendSettings, local: datetime) -> bool:
+    """Not paused, a working day and inside ``[window_start, window_end)``."""
+    if settings.paused:
         return False
     if local.isoweekday() not in settings.working_days:
         return False
     return settings.window_start <= local.time() < settings.window_end
+
+
+def schedule_open(settings: SendSettings, local: datetime) -> bool:
+    """Auto send on, not paused, a working day and inside ``[window_start, window_end)``."""
+    return settings.auto_send_enabled and window_open(settings, local)
 
 
 def is_exempt(invoice: Invoice, today: date) -> bool:

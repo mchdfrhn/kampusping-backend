@@ -50,7 +50,7 @@ from .constants import (
 )
 from .model import Message
 from .send_repository import SendRepository
-from .send_rules import SendSettings, local_day, recheck, schedule_open, short_error
+from .send_rules import SendSettings, local_day, recheck, short_error, window_open
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ async def _send_step(
     now = as_utc(now)
     local = local_now(now, config.app_timezone)
     settings = await _load_settings(session_factory)
-    if not schedule_open(settings, local):
+    if not window_open(settings, local):
         return _IDLE
     if not await _provider_connected(provider):
         return _IDLE
@@ -186,7 +186,13 @@ async def _claim_and_recheck(
         if await repo.count_sent_between(day_start, day_end) >= settings.daily_cap:
             logger.info("Send phase: daily cap of %s reached", settings.daily_cap)
             return _IDLE
-        message_id = await _claim(repo, now=now, today=local.date(), day=(day_start, day_end))
+        message_id = await _claim(
+            repo,
+            now=now,
+            today=local.date(),
+            day=(day_start, day_end),
+            include_auto=settings.auto_send_enabled,
+        )
         if message_id is None:
             await db.commit()
             return _IDLE
@@ -206,11 +212,20 @@ async def _claim_and_recheck(
 
 
 async def _claim(
-    repo: SendRepository, *, now: datetime, today: date, day: tuple[datetime, datetime]
+    repo: SendRepository,
+    *,
+    now: datetime,
+    today: date,
+    day: tuple[datetime, datetime],
+    include_auto: bool = True,
 ) -> int | None:
     for _ in range(_CLAIM_TRIES):
         candidate = await repo.next_candidate(
-            now=now, today=today, day_start=day[0], day_end=day[1]
+            now=now,
+            today=today,
+            day_start=day[0],
+            day_end=day[1],
+            include_auto=include_auto,
         )
         if candidate is None:
             return None

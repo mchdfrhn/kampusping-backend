@@ -88,31 +88,40 @@ class SendRepository:
         return count or 0
 
     async def next_candidate(
-        self, *, now: datetime, today: date, day_start: datetime, day_end: datetime
+        self,
+        *,
+        now: datetime,
+        today: date,
+        day_start: datetime,
+        day_end: datetime,
+        include_auto: bool = True,
     ) -> int | None:
         """The id of the next sendable message, or None.
 
         Queued, due (``scheduled_date`` not in the future, back-off over), oldest scheduled date
         first, then the invoice whose due date is oldest, then the id. Automatic messages of a
         student who already got one today wait for the next working day (AB-03); they stay
-        queued. On PostgreSQL the row is locked with ``SKIP LOCKED`` so parallel workers pick
-        different messages.
+        queued. When ``include_auto`` is False, only manual messages are eligible. On PostgreSQL
+        the row is locked with ``SKIP LOCKED`` so parallel workers pick different messages.
         """
+        conditions: list[ColumnElement[bool]] = [
+            Message.status == MessageStatus.QUEUED.value,
+            Message.deleted_at.is_(None),
+            Message.scheduled_date <= today,
+            or_(Message.next_attempt_at.is_(None), Message.next_attempt_at <= now),
+            or_(
+                Message.kind != MessageKind.AUTO.value,
+                ~auto_message_busy(
+                    Message.student_id, Message.id, day_start=day_start, day_end=day_end
+                ),
+            ),
+        ]
+        if not include_auto:
+            conditions.append(Message.kind == MessageKind.MANUAL.value)
         stmt = (
             select(Message.id)
             .join(Invoice, Invoice.id == Message.invoice_id)
-            .where(
-                Message.status == MessageStatus.QUEUED.value,
-                Message.deleted_at.is_(None),
-                Message.scheduled_date <= today,
-                or_(Message.next_attempt_at.is_(None), Message.next_attempt_at <= now),
-                or_(
-                    Message.kind != MessageKind.AUTO.value,
-                    ~auto_message_busy(
-                        Message.student_id, Message.id, day_start=day_start, day_end=day_end
-                    ),
-                ),
-            )
+            .where(*conditions)
             .order_by(Message.scheduled_date, Invoice.due_date, Message.id)
             .limit(1)
         )
