@@ -20,6 +20,7 @@ from app.modules.imports.columns import (
     REQUIRED_FIELDS,
     normalize_header,
 )
+from app.modules.imports.constants import ImportKind
 from app.modules.imports.validation import cell_text
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -45,6 +46,7 @@ class ParsedSheet:
     headers: list[str]
     rows: list[list[object]]
     row_numbers: list[int]
+    kind: ImportKind = ImportKind.STANDARD
 
 
 SIAKAD_REKAP_HEADERS = [
@@ -61,7 +63,9 @@ SIAKAD_REKAP_HEADERS = [
 ]
 
 
-def _try_parse_siakad_rekap(records: Sequence[tuple[int, list[object]]]) -> ParsedSheet | None:
+def _try_parse_siakad_rekap(
+    records: Sequence[tuple[int, list[object]]], today: date
+) -> ParsedSheet | None:
     header_idx = -1
     col_map: dict[str, int] = {}
 
@@ -91,7 +95,7 @@ def _try_parse_siakad_rekap(records: Sequence[tuple[int, list[object]]]) -> Pars
 
     rows: list[list[object]] = []
     row_numbers: list[int] = []
-    today_iso = date.today().isoformat()
+    today_iso = today.isoformat()
 
     nim_idx = col_map["nim"]
     rekap_idx = col_map["rekap"]
@@ -158,11 +162,17 @@ def _try_parse_siakad_rekap(records: Sequence[tuple[int, list[object]]]) -> Pars
     if not rows:
         raise ImportFileError("Berkas tidak berisi baris data.")
 
-    return ParsedSheet(headers=SIAKAD_REKAP_HEADERS, rows=rows, row_numbers=row_numbers)
+    return ParsedSheet(
+        headers=SIAKAD_REKAP_HEADERS, rows=rows, row_numbers=row_numbers, kind=ImportKind.REKAP
+    )
 
 
-def parse_upload(filename: str, content: bytes) -> ParsedSheet:
-    """Parse an uploaded file by its extension; raise ``ImportFileError`` when it is unusable."""
+def parse_upload(filename: str, content: bytes, *, today: date | None = None) -> ParsedSheet:
+    """Parse an uploaded file by its extension; raise ``ImportFileError`` when it is unusable.
+
+    ``today`` becomes the due date of rekap rows (the report has none); callers that need the
+    business date pass it, others (code extraction) may leave the server date.
+    """
     name = filename.strip().lower()
     if not name.endswith(_SUPPORTED_EXTENSIONS):
         raise ImportFileError("Format berkas tidak didukung (gunakan .csv atau .xlsx).")
@@ -172,7 +182,7 @@ def parse_upload(filename: str, content: bytes) -> ParsedSheet:
         raise ImportFileError("Berkas kosong.")
 
     records = list(_csv_records(content) if name.endswith(".csv") else _xlsx_records(content))
-    rekap_sheet = _try_parse_siakad_rekap(records)
+    rekap_sheet = _try_parse_siakad_rekap(records, today or date.today())
     if rekap_sheet is not None:
         return rekap_sheet
     return _collect(records)

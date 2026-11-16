@@ -88,9 +88,70 @@ async def preview(
 
 
 async def apply(
-    client: httpx.AsyncClient, headers: dict[str, str], batch_id: int
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    batch_id: int,
+    mark_paid_invoice_ids: list[int] | None = None,
 ) -> httpx.Response:
-    return await client.post(f"{IMPORTS_URL}/{batch_id}/apply", headers=headers)
+    body = (
+        None if mark_paid_invoice_ids is None else {"mark_paid_invoice_ids": mark_paid_invoice_ids}
+    )
+    return await client.post(f"{IMPORTS_URL}/{batch_id}/apply", headers=headers, json=body)
+
+
+REKAP_HEADER: list[object] = [
+    "No",
+    "PRODI",
+    "Jenis Kelas",
+    "NIM",
+    "Nama",
+    "No Hp",
+    "Tahun Akademik",
+    "Komponen Biaya",
+    "Rincian",
+    "Rekap",
+]
+
+
+def rekap_xlsx(*items: tuple[str, str, int]) -> bytes:
+    """A SIAKAD "Rekap Tunggakan" sheet; each item is ``(nim, academic year, amount)``."""
+    rows: list[list[object]] = [["Laporan Rekap Tunggakan"], [], [], [], REKAP_HEADER]
+    for number, (nim, year, amount) in enumerate(items, start=1):
+        rows.append(
+            [
+                number,
+                "Teknik Sipil",
+                "Kelas Pagi",
+                f"{nim} ",
+                f"NAMA {nim}",
+                "081234567890",
+                f"{year} ",
+                "002 - SPP",
+                amount,
+                amount,
+            ]
+        )
+    return make_xlsx(rows)
+
+
+async def preview_rekap(
+    client: httpx.AsyncClient, headers: dict[str, str], *items: tuple[str, str, int]
+) -> dict[str, Any]:
+    response = await upload(
+        client, headers, rekap_xlsx(*items), filename="rekap.xlsx", semester=None
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def import_rekap(
+    client: httpx.AsyncClient, headers: dict[str, str], *items: tuple[str, str, int]
+) -> dict[str, Any]:
+    """Preview then apply a rekap file; returns the applied batch."""
+    batch = await preview_rekap(client, headers, *items)
+    response = await apply(client, headers, batch["id"])
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 async def import_lines(

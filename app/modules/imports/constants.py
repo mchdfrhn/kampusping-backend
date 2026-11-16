@@ -62,3 +62,17 @@ MSG_DELETE_APPLIED_NOT_ALLOWED = (
 )
 # Conflicts listed in a response; ``conflicts_total`` always carries the full count.
 MAX_REPORTED_CONFLICTS = 50
+
+
+class ImportKind(StrEnum):
+    """Shape of an uploaded file: a plain export, or SIAKAD's "Rekap Tunggakan" (arrears only)."""
+
+    STANDARD = "standard"
+    REKAP = "rekap"
+
+
+# Invoice codes generated for rekap rows (``TGK-{nim}-{semester}``); only these are ever treated as
+# paid because they vanished from a later file.
+REKAP_CODE_PREFIX = "TGK-"
+# Share of a semester's open rekap invoices that may vanish at once before the export is suspect.
+INCOMPLETE_EXPORT_THRESHOLD = 0.30

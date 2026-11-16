@@ -121,7 +121,8 @@ class ImportService:
         Business data (students, invoices) is not touched.
         """
         try:
-            sheet = parse_upload(filename, content)
+            today = local_today(self.clock(), settings.app_timezone)
+            sheet = parse_upload(filename, content, today=today)
             columns = resolve_columns(sheet.headers, source)
         except ImportFileError as exc:
             raise AppException(str(exc), status_code=422, code=VALIDATION_ERROR) from exc
