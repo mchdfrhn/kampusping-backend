@@ -27,6 +27,7 @@ SUMMARY_KEYS = {
     "students_updated",
     "invoices_new",
     "invoices_updated",
+    "invoices_unchanged",
     "invoices_skipped",
 }
 

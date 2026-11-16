@@ -10,12 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.invoices.model import Invoice
 from app.modules.students.model import Student
 
-from .constants import MSG_CODE_OTHER_STUDENT, MSG_DUPLICATE_CODE, MSG_NAME_REQUIRED
+from .constants import (
+    MSG_CODE_OTHER_STUDENT,
+    MSG_DUPLICATE_CODE,
+    MSG_NAME_REQUIRED,
+    ImportKind,
+)
+from .diff import classify_rows
 from .existing import (
     belongs_to_other_student,
     invoice_owner_nims,
     invoices_by_code,
-    is_sticky_skip,
     students_by_nim,
     unpaid_invoices_for_students,
 )
@@ -70,7 +75,14 @@ async def build_preview(
         "rows_total": len(sheet.rows),
         "rows_valid": len(accepted),
         "rows_error": len({issue.row_number for issue in issues}),
-        **_predict(accepted, students, invoices, superseded_count=len(superseded)),
+        **_predict(
+            accepted,
+            students,
+            invoices,
+            kind=sheet.kind,
+            source=source,
+            superseded_count=len(superseded),
+        ),
     }
     return PreviewResult(rows=accepted, issues=issues, summary=summary)
 
@@ -106,22 +118,17 @@ def _predict(
     students: dict[str, Student],
     invoices: dict[str, Invoice],
     *,
+    kind: ImportKind,
+    source: str,
     superseded_count: int = 0,
 ) -> dict[str, int]:
     nims = {row.nim for row in rows}
-    new_invoices = updated = skipped = 0
-    for row in rows:
-        invoice = invoices.get(row.invoice_code)
-        if invoice is None:
-            new_invoices += 1
-        elif is_sticky_skip(invoice, row):
-            skipped += 1
-        else:
-            updated += 1
+    sorted_rows = classify_rows(rows, invoices, kind=kind, source=source)
     return {
         "students_new": len(nims - students.keys()),
         "students_updated": len(nims & students.keys()),
-        "invoices_new": new_invoices,
-        "invoices_updated": updated + superseded_count,
-        "invoices_skipped": skipped,
+        "invoices_new": len(sorted_rows.new),
+        "invoices_updated": len(sorted_rows.changed) + superseded_count,
+        "invoices_unchanged": len(sorted_rows.unchanged),
+        "invoices_skipped": len(sorted_rows.skipped),
     }

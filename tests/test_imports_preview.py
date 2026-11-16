@@ -60,6 +60,7 @@ async def test_preview_changes_no_business_data(
         "students_updated": 1,
         "invoices_new": 1,
         "invoices_updated": 1,
+        "invoices_unchanged": 0,
         "invoices_skipped": 0,
     }
     # Nothing in the business tables moved.

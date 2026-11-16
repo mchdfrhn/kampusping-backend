@@ -14,6 +14,7 @@ from app.modules.students.constants import PhoneStatus
 from app.modules.students.model import Student
 
 from .changes import ChangeRecorder
+from .constants import ImportKind
 from .existing import (
     belongs_to_other_student,
     invoice_owner_nims,
@@ -115,6 +116,7 @@ async def apply_rows(
     now: datetime,
     today: date,
     recorder: ChangeRecorder | None = None,
+    kind: ImportKind = ImportKind.STANDARD,
 ) -> dict[str, int]:
     """Upsert students by NIM, then invoices by code; returns the actual counts.
 
@@ -166,7 +168,12 @@ async def apply_rows(
             updated_nims.add(row.nim)
     await db.flush()  # new students need their ids for the invoices
 
-    counts = {"invoices_new": 0, "invoices_updated": 0, "invoices_skipped": 0}
+    counts = {
+        "invoices_new": 0,
+        "invoices_updated": 0,
+        "invoices_unchanged": 0,
+        "invoices_skipped": 0,
+    }
     paid_invoice_ids: list[int] = []
     restored_invoice_ids: list[int] = []
     for row in rows:
@@ -214,7 +221,12 @@ async def apply_rows(
             paid_invoice_ids.append(invoice.id)
         if changed:
             _touch(invoice, actor, now)
-        counts["invoices_skipped" if skipped else "invoices_updated"] += 1
+        if skipped:
+            counts["invoices_skipped"] += 1
+        elif changed:
+            counts["invoices_updated"] += 1
+        else:
+            counts["invoices_unchanged"] += 1
 
     for old_invoice in superseded_invoices:
         old_invoice.status = InvoiceStatus.PAID.value
