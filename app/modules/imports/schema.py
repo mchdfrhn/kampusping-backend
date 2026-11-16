@@ -51,3 +51,7 @@ class RollbackPreview(BaseModel):
     sent_messages: int
     conflicts: list[RollbackConflictRead]
     conflicts_total: int
+
+
+class ImportDetailIds(BaseModel):
+    ids: list[int]

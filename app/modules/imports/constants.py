@@ -35,6 +35,8 @@ SUMMARY_KEYS = (
     "invoices_updated",
     "invoices_unchanged",
     "invoices_skipped",
+    "paid_suspected",
+    "incomplete_warning",
 )
 
 # Only this many row issues are stored per batch; ``summary.rows_error`` still counts all of them.

@@ -7,16 +7,17 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.invoices.model import Invoice
 from app.modules.students.model import Student
 
+from .absent import find_suspected_paid
 from .constants import (
     MSG_CODE_OTHER_STUDENT,
     MSG_DUPLICATE_CODE,
     MSG_NAME_REQUIRED,
     ImportKind,
 )
-from .diff import classify_rows
+from .details import Details, build_details
+from .diff import Classification, classify_rows
 from .existing import (
     belongs_to_other_student,
     invoice_owner_nims,
@@ -33,6 +34,7 @@ class PreviewResult:
     rows: list[ValidRow]
     issues: list[RowIssue]
     summary: dict[str, int]
+    details: Details
 
 
 async def build_preview(
@@ -74,20 +76,23 @@ async def build_preview(
         exclude_codes=imported_codes,
     )
 
+    classification = classify_rows(accepted, invoices, kind=sheet.kind, source=source)
+    suspected = await find_suspected_paid(db, accepted) if sheet.kind == ImportKind.REKAP else None
+
     summary = {
         "rows_total": len(sheet.rows),
         "rows_valid": len(accepted),
         "rows_error": len({issue.row_number for issue in issues}),
-        **_predict(
-            accepted,
-            students,
-            invoices,
-            kind=sheet.kind,
-            source=source,
-            superseded_count=len(superseded),
-        ),
+        **_predict(accepted, students, classification, superseded_count=len(superseded)),
+        "paid_suspected": len(suspected.items) if suspected else 0,
+        "incomplete_warning": int(suspected.incomplete) if suspected else 0,
     }
-    return PreviewResult(rows=accepted, issues=issues, summary=summary)
+    return PreviewResult(
+        rows=accepted,
+        issues=issues,
+        summary=summary,
+        details=build_details(classification, students, suspected),
+    )
 
 
 def _cross_row_checks(
@@ -119,19 +124,16 @@ def _cross_row_checks(
 def _predict(
     rows: list[ValidRow],
     students: dict[str, Student],
-    invoices: dict[str, Invoice],
+    classification: Classification,
     *,
-    kind: ImportKind,
-    source: str,
     superseded_count: int = 0,
 ) -> dict[str, int]:
     nims = {row.nim for row in rows}
-    sorted_rows = classify_rows(rows, invoices, kind=kind, source=source)
     return {
         "students_new": len(nims - students.keys()),
         "students_updated": len(nims & students.keys()),
-        "invoices_new": len(sorted_rows.new),
-        "invoices_updated": len(sorted_rows.changed) + superseded_count,
-        "invoices_unchanged": len(sorted_rows.unchanged),
-        "invoices_skipped": len(sorted_rows.skipped),
+        "invoices_new": len(classification.new),
+        "invoices_updated": len(classification.changed) + superseded_count,
+        "invoices_unchanged": len(classification.unchanged),
+        "invoices_skipped": len(classification.skipped),
     }

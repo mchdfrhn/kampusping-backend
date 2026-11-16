@@ -59,6 +59,8 @@ async def test_apply_upserts_students_and_invoices(
         "invoices_updated": 0,
         "invoices_unchanged": 0,
         "invoices_skipped": 0,
+        "paid_suspected": 0,
+        "incomplete_warning": 0,
     }
     student = await student_by_nim("2201")
     assert student.name == "Budi"
@@ -651,6 +653,8 @@ async def test_row_with_an_invoice_code_of_another_student_is_a_row_error(
         "invoices_updated": 1,
         "invoices_unchanged": 0,
         "invoices_skipped": 0,
+        "paid_suspected": 0,
+        "incomplete_warning": 0,
     }
     errors = (await client.get(f"{IMPORTS_URL}/{batch['id']}/errors", headers=staf_headers)).json()
     assert errors["items"] == [

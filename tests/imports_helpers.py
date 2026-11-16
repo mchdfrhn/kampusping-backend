@@ -28,6 +28,8 @@ SUMMARY_KEYS = {
     "invoices_new",
     "invoices_updated",
     "invoices_unchanged",
+    "paid_suspected",
+    "incomplete_warning",
     "invoices_skipped",
 }
 
@@ -197,3 +199,19 @@ async def rows_are_sql_null(batch_id: int) -> bool:
 async def count(model: type[Student] | type[Invoice] | type[ImportBatch]) -> int:
     async with get_session_factory()() as db:
         return await db.scalar(select(func.count()).select_from(model)) or 0
+
+
+async def import_details(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    batch_id: int,
+    category: str,
+    **params: Any,
+) -> dict[str, Any]:
+    response = await client.get(
+        f"{IMPORTS_URL}/{batch_id}/details",
+        params={"category": category, **params},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()

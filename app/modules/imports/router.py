@@ -1,5 +1,5 @@
 import logging
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 
@@ -11,8 +11,9 @@ from app.modules.invoices.constants import InvoiceSource
 from app.modules.users.model import User
 from app.shared.pagination import ListParams, ListQuery, Page, SortOrder
 
+from .details import DetailCategory
 from .parser import MAX_FILE_BYTES
-from .schema import ImportBatchRead, ImportRowErrorRead, RollbackPreview
+from .schema import ImportBatchRead, ImportDetailIds, ImportRowErrorRead, RollbackPreview
 from .service import ImportService
 from .validation import SEMESTER_MAX
 
@@ -156,3 +157,37 @@ async def list_import_errors(
         page=params.page,
         page_size=params.page_size,
     )
+
+
+@router.get(
+    "/{batch_id}/details",
+    response_model=Page[dict[str, Any]],
+    summary="List the new, changed or suspected-paid invoices of a preview",
+)
+async def list_import_details(
+    batch_id: int,
+    db: DbSession,
+    _: CanRead,
+    category: DetailCategory,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[dict[str, Any]]:
+    items, total = await ImportService(db).list_details(
+        batch_id, category, page=page, page_size=page_size
+    )
+    return Page(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.get(
+    "/{batch_id}/details/ids",
+    response_model=ImportDetailIds,
+    summary="Invoice ids of every suspected-paid invoice of a preview",
+)
+async def list_import_detail_ids(
+    batch_id: int,
+    db: DbSession,
+    _: CanRead,
+    category: Literal["suspected_paid"],
+) -> ImportDetailIds:
+    del category  # only one list has selectable ids; the parameter keeps the URL explicit
+    return ImportDetailIds(ids=await ImportService(db).list_detail_ids(batch_id))

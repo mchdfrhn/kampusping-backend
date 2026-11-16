@@ -62,6 +62,8 @@ async def test_preview_changes_no_business_data(
         "invoices_updated": 1,
         "invoices_unchanged": 0,
         "invoices_skipped": 0,
+        "paid_suspected": 0,
+        "incomplete_warning": 0,
     }
     # Nothing in the business tables moved.
     assert await count(Student) == 1
