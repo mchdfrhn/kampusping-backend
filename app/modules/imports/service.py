@@ -187,7 +187,9 @@ class ImportService:
         items = (await self._preview_details(batch_id)).get(DetailCategory.SUSPECTED_PAID.value, [])
         return [item["invoice_id"] for item in items]
 
-    async def apply(self, batch_id: int, actor: User) -> ImportBatch:
+    async def apply(
+        self, batch_id: int, actor: User, mark_paid_invoice_ids: Sequence[int] = ()
+    ) -> ImportBatch:
         """Apply a previewed batch in one transaction; the summary becomes the actual counts.
 
         The batch is claimed first (``UPDATE ... WHERE status = 'preview'``), so of several
@@ -215,6 +217,12 @@ class ImportService:
         if batch is None:  # deleted between the claim and the read: nothing sensible to apply
             raise AppException(MSG_BATCH_NOT_FOUND, status_code=404, code=NOT_FOUND)
         rows = [row_from_json(data) for data in batch.rows or []]
+        await self.db.refresh(batch, attribute_names=["details"])
+        # Only invoices the preview listed as suspected paid can be marked; anything else is noise.
+        suspects = {
+            item["invoice_id"]
+            for item in (batch.details or {}).get(DetailCategory.SUSPECTED_PAID.value, [])
+        }
         recorder = ChangeRecorder()
         counts = await apply_rows(
             self.db,
@@ -225,6 +233,7 @@ class ImportService:
             today=local_today(now, settings.app_timezone),
             recorder=recorder,
             kind=ImportKind(batch.kind),
+            paid_by_absence_ids=suspects & set(mark_paid_invoice_ids),
         )
         self.db.add_all(recorder.build(batch_id=batch.id, actor=actor.email, now=now))
         batch.has_change_log = True

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ImportBatchRead(BaseModel):
@@ -55,3 +55,9 @@ class RollbackPreview(BaseModel):
 
 class ImportDetailIds(BaseModel):
     ids: list[int]
+
+
+class ImportApplyRequest(BaseModel):
+    """Which suspected-paid invoices staff approved; none when omitted (nothing is marked paid)."""
+
+    mark_paid_invoice_ids: list[int] = Field(default_factory=list, max_length=20_000)

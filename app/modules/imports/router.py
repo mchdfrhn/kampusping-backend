@@ -13,7 +13,13 @@ from app.shared.pagination import ListParams, ListQuery, Page, SortOrder
 
 from .details import DetailCategory
 from .parser import MAX_FILE_BYTES
-from .schema import ImportBatchRead, ImportDetailIds, ImportRowErrorRead, RollbackPreview
+from .schema import (
+    ImportApplyRequest,
+    ImportBatchRead,
+    ImportDetailIds,
+    ImportRowErrorRead,
+    RollbackPreview,
+)
 from .service import ImportService
 from .validation import SEMESTER_MAX
 
@@ -68,9 +74,15 @@ async def create_import(
     "/{batch_id}/apply", response_model=ImportBatchRead, summary="Apply a previewed import"
 )
 async def apply_import(
-    batch_id: int, db: DbSession, actor: CanCreate, clock: ClockDep
+    batch_id: int,
+    db: DbSession,
+    actor: CanCreate,
+    clock: ClockDep,
+    body: ImportApplyRequest | None = None,
 ) -> ImportBatchRead:
-    return ImportBatchRead.model_validate(await ImportService(db, clock).apply(batch_id, actor))
+    selected = body.mark_paid_invoice_ids if body else []
+    batch = await ImportService(db, clock).apply(batch_id, actor, selected)
+    return ImportBatchRead.model_validate(batch)
 
 
 @router.post(

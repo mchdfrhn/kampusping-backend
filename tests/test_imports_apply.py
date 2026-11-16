@@ -59,6 +59,7 @@ async def test_apply_upserts_students_and_invoices(
         "invoices_updated": 0,
         "invoices_unchanged": 0,
         "invoices_skipped": 0,
+        "invoices_paid_by_absence": 0,
         "paid_suspected": 0,
         "incomplete_warning": 0,
     }

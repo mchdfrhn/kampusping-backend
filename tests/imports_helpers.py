@@ -30,6 +30,7 @@ SUMMARY_KEYS = {
     "invoices_unchanged",
     "paid_suspected",
     "incomplete_warning",
+    "invoices_paid_by_absence",
     "invoices_skipped",
 }
 
