@@ -14,6 +14,7 @@ class ImportBatchRead(BaseModel):
     file_name: str
     semester: str | None
     status: str
+    kind: str
     summary: dict[str, int]
     created_at: datetime
     created_by: str | None

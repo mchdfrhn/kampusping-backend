@@ -134,6 +134,7 @@ class ImportService:
                 file_name=safe_file_name(filename),
                 semester=semester,
                 status=ImportStatus.PREVIEW.value,
+                kind=sheet.kind.value,
                 summary=result.summary,
                 rows=[row_to_json(row) for row in result.rows],
                 created_by=actor.email,

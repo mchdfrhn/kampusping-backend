@@ -36,6 +36,15 @@ class ImportBatchRepository(BaseRepository[ImportBatch]):
             .execution_options(populate_existing=True)
         )
 
+    async def get_with_details(self, batch_id: int) -> ImportBatch | None:
+        """The batch including its preview details, refreshed from the database."""
+        return await self.db.scalar(
+            self.select()
+            .where(ImportBatch.id == batch_id)
+            .options(undefer(ImportBatch.details))
+            .execution_options(populate_existing=True)
+        )
+
     async def _claim(
         self, batch_id: int, from_status: ImportStatus, values: dict[str, object]
     ) -> bool:
