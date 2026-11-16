@@ -800,3 +800,39 @@ async def test_same_nim_in_several_rows_creates_the_student_once(
     assert student.phone_status == "valid"
     for code in ("INV-1", "INV-2", "INV-3"):
         assert (await invoice_by_code(code)).student_id == student.id
+
+
+async def test_reimport_restoring_deleted_invoice_cancels_lingering_pending_messages(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    student_id = await make_student("2201", "Budi")
+    inv_id = await make_invoice(student_id, "INV-1", amount=1_000_000)
+    deleted_at = datetime(2026, 10, 1, tzinfo=UTC)
+    async with get_session_factory()() as db:
+        inv = await db.get(Invoice, inv_id)
+        assert inv is not None
+        inv.deleted_at = deleted_at
+        inv.deleted_by = "admin@example.com"
+        db.add(
+            Message(
+                student_id=student_id,
+                invoice_id=inv_id,
+                rule_id=None,
+                kind="manual",
+                scheduled_date=date(2026, 10, 1),
+                body="Orphan queued",
+                status="queued",
+                queued_at=deleted_at,
+                created_by="admin@example.com",
+                updated_by="admin@example.com",
+            )
+        )
+        await db.commit()
+
+    await import_lines(client, staf_headers, line(nim="2201", name="Budi", code="INV-1"))
+
+    async with get_session_factory()() as db:
+        msg = (await db.scalars(select(Message).where(Message.invoice_id == inv_id))).one()
+        assert msg.status == "cancelled"
+        assert msg.cancel_reason == "manual"
+        assert msg.error == "Tagihan diimpor ulang"

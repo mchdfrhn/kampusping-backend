@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -327,6 +327,7 @@ ENDPOINTS = [
     ("GET", MESSAGES_URL),
     ("GET", f"{MESSAGES_URL}/1"),
     ("POST", f"{MESSAGES_URL}/1/cancel"),
+    ("DELETE", f"{MESSAGES_URL}/1"),
     ("GET", STATUS_URL),
     ("POST", LOGOUT_URL),
 ]
@@ -358,3 +359,91 @@ async def test_staf_and_admin_can_read_the_log(
     for headers in (staf_headers, admin_headers):
         assert (await client.get(MESSAGES_URL, headers=headers)).status_code == 200
         assert (await client.get(STATUS_URL, headers=headers)).status_code == 200
+
+
+# --- Delete ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", ["queued", "cancelled", "failed"])
+async def test_delete_allows_queued_cancelled_and_failed(
+    client: httpx.AsyncClient, staf_headers: dict[str, str], status: str
+) -> None:
+    message_id = await add_message(
+        status=status, cancel_reason="manual" if status == "cancelled" else None
+    )
+
+    response = await client.delete(f"{MESSAGES_URL}/{message_id}", headers=staf_headers)
+
+    assert response.status_code == 204
+    stored = await get_message(message_id)
+    assert stored.deleted_at is not None
+    assert stored.deleted_by == "staf@example.com"
+    if status == "queued":
+        assert stored.status == "cancelled"
+        assert stored.cancel_reason == "manual"
+    else:
+        assert stored.status == status
+    get_res = await client.get(f"{MESSAGES_URL}/{message_id}", headers=staf_headers)
+    assert get_res.status_code == 404
+    assert len(await audit_events("message.deleted")) == 1
+
+
+async def test_delete_allows_stale_unassigned_sending(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    stale_at = datetime.now(UTC) - timedelta(minutes=20)
+    message_id = await add_message(status="sending", provider_message_id=None, updated_at=stale_at)
+
+    response = await client.delete(f"{MESSAGES_URL}/{message_id}", headers=staf_headers)
+
+    assert response.status_code == 204
+    stored = await get_message(message_id)
+    assert stored.deleted_at is not None
+    assert stored.status == "cancelled"
+    assert stored.cancel_reason == "manual"
+
+
+@pytest.mark.parametrize(
+    ("status", "extra"),
+    [
+        ("sent", {"sent_at": NOW}),
+        ("delivered", {"sent_at": NOW, "delivered_at": NOW}),
+        ("read", {"sent_at": NOW, "delivered_at": NOW, "read_at": NOW}),
+        ("sending", {"provider_message_id": None}),  # fresh active claim
+        (
+            "sending",
+            {
+                "provider_message_id": "wamid-123",
+                "updated_at": datetime.now(UTC) - timedelta(minutes=20),
+            },
+        ),
+    ],
+)
+async def test_delete_refuses_sent_or_active_sending(
+    client: httpx.AsyncClient,
+    staf_headers: dict[str, str],
+    status: str,
+    extra: dict[str, Any],
+) -> None:
+    message_id = await add_message(status=status, **extra)
+
+    response = await client.delete(f"{MESSAGES_URL}/{message_id}", headers=staf_headers)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conflict"
+    assert (await get_message(message_id)).deleted_at is None
+    assert await audit_events("message.deleted") == []
+
+
+async def test_delete_unknown_and_already_deleted_is_404(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    assert (await client.delete(f"{MESSAGES_URL}/999999", headers=staf_headers)).status_code == 404
+
+    message_id = await add_message(status="queued")
+    assert (
+        await client.delete(f"{MESSAGES_URL}/{message_id}", headers=staf_headers)
+    ).status_code == 204
+    assert (
+        await client.delete(f"{MESSAGES_URL}/{message_id}", headers=staf_headers)
+    ).status_code == 404

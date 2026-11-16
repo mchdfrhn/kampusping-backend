@@ -2,21 +2,19 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import VALIDATION_ERROR
 from app.core.exceptions import AppException
 from app.modules.invoices.constants import InvoiceStatus
 from app.modules.invoices.model import Invoice
-from app.modules.messages.constants import CancelReason, MessageStatus
-from app.modules.messages.model import Message
+from app.modules.messages.constants import CancelReason
+from app.modules.messages.log_repository import cancel_pending_messages_for_invoices
 from app.modules.students.constants import PhoneStatus
 from app.modules.students.model import Student
 
 from .changes import ChangeRecorder
 from .existing import (
-    _chunks,
     belongs_to_other_student,
     invoice_owner_nims,
     invoices_by_code,
@@ -108,27 +106,6 @@ def _mark_paid(invoice: Invoice, row: ValidRow, source: str, today: date) -> Non
     invoice.paid_via = row.paid_via or source
 
 
-async def _cancel_queued_messages(
-    db: AsyncSession, invoice_ids: list[int], *, actor: str, now: datetime
-) -> None:
-    """Cancel any queued WhatsApp messages for invoices that became paid during the import."""
-    for chunk in _chunks(sorted(set(invoice_ids))):
-        await db.execute(
-            update(Message)
-            .where(
-                Message.invoice_id.in_(chunk),
-                Message.status == MessageStatus.QUEUED.value,
-            )
-            .values(
-                status=MessageStatus.CANCELLED.value,
-                cancel_reason=CancelReason.PAID.value,
-                updated_by=actor,
-                updated_at=now,
-            )
-            .execution_options(synchronize_session=False)
-        )
-
-
 async def apply_rows(
     db: AsyncSession,
     rows: list[ValidRow],
@@ -191,6 +168,7 @@ async def apply_rows(
 
     counts = {"invoices_new": 0, "invoices_updated": 0, "invoices_skipped": 0}
     paid_invoice_ids: list[int] = []
+    restored_invoice_ids: list[int] = []
     for row in rows:
         invoice = invoices.get(row.invoice_code)
         if invoice is None:
@@ -222,6 +200,7 @@ async def apply_rows(
         skipped = not restoring and is_sticky_skip(invoice, row)
         changed = _restore(invoice)
         if restoring:
+            restored_invoice_ids.append(invoice.id)
             changed = _set(invoice, "status", InvoiceStatus.UNPAID.value) or changed
             changed = _set(invoice, "paid_at", None) or changed
             changed = _set(invoice, "paid_via", None) or changed
@@ -247,7 +226,21 @@ async def apply_rows(
 
     await db.flush()
     if paid_invoice_ids:
-        await _cancel_queued_messages(db, paid_invoice_ids, actor=actor, now=now)
+        await cancel_pending_messages_for_invoices(
+            db, paid_invoice_ids, reason=CancelReason.PAID, actor=actor, now=now
+        )
+    restored_unpaid_ids = [
+        inv_id for inv_id in restored_invoice_ids if inv_id not in paid_invoice_ids
+    ]
+    if restored_unpaid_ids:
+        await cancel_pending_messages_for_invoices(
+            db,
+            restored_unpaid_ids,
+            reason=CancelReason.MANUAL,
+            error="Tagihan diimpor ulang",
+            actor=actor,
+            now=now,
+        )
 
     return {
         "students_new": len(new_nims),

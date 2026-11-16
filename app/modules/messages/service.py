@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,15 +7,18 @@ from app.core.constants import CONFLICT, NOT_FOUND
 from app.core.exceptions import AppException
 from app.modules.audit.service import record_audit
 from app.modules.users.model import User
-from app.shared.clock import Clock
+from app.shared.clock import Clock, as_utc
 from app.shared.pagination import ListParams
 from app.shared.utils import utc_now
 
 from .constants import (
     AUDIT_ENTITY_MESSAGE,
     AUDIT_MESSAGE_CANCELLED,
+    AUDIT_MESSAGE_DELETED,
+    MSG_DELETE_NOT_ALLOWED,
     MSG_NOT_FOUND,
     MSG_ONLY_QUEUED_CANCELLABLE,
+    STALE_SENDING_MINUTES,
     MessageStatus,
 )
 from .log_repository import MessageLogRepository
@@ -75,6 +78,26 @@ class MessageService:
         message = await self.messages.reload(message_id)
         assert message is not None  # noqa: S101 - it was just updated
         return message
+
+    async def delete(self, message_id: int, actor: User) -> None:
+        """Soft-delete a queued, cancelled, failed, or stale unassigned sending message."""
+        now = as_utc(self.clock())
+        stale_before = now - timedelta(minutes=STALE_SENDING_MINUTES)
+        changed = await self.messages.soft_delete_if_removable(
+            message_id, actor=actor.email, now=now, stale_before=stale_before
+        )
+        if not changed:
+            await self.get(message_id)
+            raise AppException(MSG_DELETE_NOT_ALLOWED, status_code=409, code=CONFLICT)
+        await record_audit(
+            self.db,
+            actor=actor.email,
+            action=AUDIT_MESSAGE_DELETED,
+            entity=AUDIT_ENTITY_MESSAGE,
+            entity_id=message_id,
+            detail={"message_id": message_id},
+        )
+        await self.db.commit()
 
     async def apply_receipt(self, provider_message_id: str, state: ReceiptState) -> None:
         """Apply a delivery receipt from the gateway; unknown ids and stale receipts are no-ops."""

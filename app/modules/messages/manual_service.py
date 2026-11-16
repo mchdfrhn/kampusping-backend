@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Sequence
 from datetime import date
 
 from sqlalchemy import distinct, or_, select
@@ -12,6 +13,7 @@ from app.modules.audit.service import record_audit
 from app.modules.invoices.constants import InvoiceStatus
 from app.modules.invoices.model import Invoice
 from app.modules.messages.constants import MessageKind, MessageStatus
+from app.modules.messages.log_repository import chunk_ids
 from app.modules.messages.model import Message
 from app.modules.messages.schema import (
     ExcludedBreakdown,
@@ -73,7 +75,12 @@ class ManualMessageService:
             raise AppException("Templat pesan tidak aktif.", status_code=422, code=VALIDATION_ERROR)
         return template
 
-    def _build_invoices_query(self, req: ManualMessagePreviewRequest | ManualMessageSendRequest):
+    def _build_invoices_query(
+        self,
+        req: ManualMessagePreviewRequest | ManualMessageSendRequest,
+        *,
+        lock_rows: bool = False,
+    ):
         stmt = (
             select(Invoice)
             .join(Invoice.student)
@@ -109,18 +116,34 @@ class ManualMessageService:
         if req.invoice_ids:
             stmt = stmt.where(Invoice.id.in_(req.invoice_ids))
 
-        return stmt.order_by(Invoice.due_date.asc(), Student.nim.asc())
+        stmt = stmt.order_by(Invoice.due_date.asc(), Student.nim.asc())
+        if lock_rows and self.db.get_bind().dialect.name == "postgresql":
+            stmt = stmt.with_for_update(of=Invoice)
+        return stmt
 
-    async def _pending_invoice_ids(self) -> set[int]:
+    async def _pending_invoice_ids(self, invoice_ids: Sequence[int]) -> set[int]:
         """Invoices that already have a manual message waiting to go out (queued or sending)."""
-        rows = await self.db.scalars(
-            select(Message.invoice_id).where(
-                Message.kind == MessageKind.MANUAL.value,
-                Message.status.in_((MessageStatus.QUEUED.value, MessageStatus.SENDING.value)),
-                Message.deleted_at.is_(None),
+        unique_ids = sorted(set(invoice_ids))
+        if not unique_ids:
+            return set()
+
+        pending: set[int] = set()
+        for chunk in chunk_ids(unique_ids):
+            rows = await self.db.scalars(
+                select(Message.invoice_id)
+                .join(Invoice, Message.invoice_id == Invoice.id)
+                .join(Student, Invoice.student_id == Student.id)
+                .where(
+                    Message.invoice_id.in_(chunk),
+                    Message.kind == MessageKind.MANUAL.value,
+                    Message.status.in_((MessageStatus.QUEUED.value, MessageStatus.SENDING.value)),
+                    Message.deleted_at.is_(None),
+                    Invoice.deleted_at.is_(None),
+                    Student.deleted_at.is_(None),
+                )
             )
-        )
-        return set(rows)
+            pending.update(rows)
+        return pending
 
     def _check_eligibility(
         self, invoice: Invoice, today: date, pending_invoice_ids: set[int]
@@ -151,7 +174,7 @@ class ManualMessageService:
 
         stmt = self._build_invoices_query(req)
         invoices = list((await self.db.scalars(stmt)).all())
-        pending = await self._pending_invoice_ids()
+        pending = await self._pending_invoice_ids([inv.id for inv in invoices])
 
         breakdown = ExcludedBreakdown()
         items: list[ManualRecipientItem] = []
@@ -223,9 +246,9 @@ class ManualMessageService:
         now = as_utc(self.clock())
         today = local_today(now, config.app_timezone)
 
-        stmt = self._build_invoices_query(req)
+        stmt = self._build_invoices_query(req, lock_rows=True)
         invoices = list((await self.db.scalars(stmt)).all())
-        pending = await self._pending_invoice_ids()
+        pending = await self._pending_invoice_ids([inv.id for inv in invoices])
 
         eligible_invoices: list[Invoice] = []
         excluded_count = 0

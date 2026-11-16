@@ -1,11 +1,12 @@
 """Queries behind the message log and the delivery receipts. Only flushes; the caller commits."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Select, func, update
+from sqlalchemy import Select, and_, case, func, or_, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.shared.pagination import ListParams
@@ -19,10 +20,67 @@ from .constants import (
 )
 from .model import Message
 
+PENDING_CHUNK_SIZE = 500
+
 
 def _rowcount(result: Any) -> int:
     assert isinstance(result, CursorResult)  # noqa: S101 - narrows the type for pyright
     return max(result.rowcount, 0)
+
+
+def chunk_ids(values: Sequence[int], size: int = PENDING_CHUNK_SIZE) -> Iterator[Sequence[int]]:
+    """Yield slices of ``values`` bounded for SQLite's bind-parameter limit."""
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
+
+
+async def cancel_pending_messages_for_invoices(
+    db: AsyncSession,
+    invoice_ids: Sequence[int],
+    *,
+    reason: CancelReason,
+    actor: str,
+    now: datetime,
+    error: str | None = None,
+) -> int:
+    """Cancel queued or unassigned sending messages on the given invoices.
+
+    Messages already handed off to WhatsApp (``provider_message_id`` is set) stay intact
+    so webhook delivery receipts and history remain accurate. Only flushes.
+    """
+    unique_ids = sorted(set(invoice_ids))
+    if not unique_ids:
+        return 0
+
+    values: dict[str, Any] = {
+        "status": MessageStatus.CANCELLED.value,
+        "cancel_reason": reason.value,
+        "updated_by": actor,
+        "updated_at": now,
+    }
+    if error is not None:
+        values["error"] = error
+
+    changed = 0
+    for chunk in chunk_ids(unique_ids):
+        result = await db.execute(
+            update(Message)
+            .where(
+                Message.invoice_id.in_(chunk),
+                Message.deleted_at.is_(None),
+                or_(
+                    Message.status == MessageStatus.QUEUED.value,
+                    and_(
+                        Message.status == MessageStatus.SENDING.value,
+                        Message.provider_message_id.is_(None),
+                    ),
+                ),
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        changed += _rowcount(result)
+    return changed
 
 
 class MessageLogRepository(BaseRepository[Message]):
@@ -85,6 +143,53 @@ class MessageLogRepository(BaseRepository[Message]):
             .values(
                 status=MessageStatus.CANCELLED.value,
                 cancel_reason=CancelReason.MANUAL.value,
+                updated_at=now,
+                updated_by=actor,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return _rowcount(result)
+
+    async def soft_delete_if_removable(
+        self, message_id: int, *, actor: str, now: datetime, stale_before: datetime
+    ) -> int:
+        """Soft-delete a queue/history row unless already sent or actively sending.
+
+        Returns rows changed (0 or 1). Stale ``sending`` rows (never given a provider id and older
+        than ``stale_before``) are marked ``cancelled`` alongside soft-deletion so they cannot
+        block future eligibility checks.
+        """
+        pending_statuses = (MessageStatus.QUEUED.value, MessageStatus.SENDING.value)
+        removable = or_(
+            Message.status.in_(
+                (
+                    MessageStatus.QUEUED.value,
+                    MessageStatus.CANCELLED.value,
+                    MessageStatus.FAILED.value,
+                )
+            ),
+            and_(
+                Message.status == MessageStatus.SENDING.value,
+                Message.provider_message_id.is_(None),
+                Message.updated_at < stale_before,
+            ),
+        )
+        new_status = case(
+            (Message.status.in_(pending_statuses), MessageStatus.CANCELLED.value),
+            else_=Message.status,
+        )
+        new_reason = case(
+            (Message.status.in_(pending_statuses), CancelReason.MANUAL.value),
+            else_=Message.cancel_reason,
+        )
+        result = await self.db.execute(
+            update(Message)
+            .where(Message.id == message_id, Message.deleted_at.is_(None), removable)
+            .values(
+                status=new_status,
+                cancel_reason=new_reason,
+                deleted_at=now,
+                deleted_by=actor,
                 updated_at=now,
                 updated_by=actor,
             )

@@ -13,8 +13,8 @@ from app.core.constants import CONFLICT, NOT_FOUND, VALIDATION_ERROR
 from app.core.exceptions import AppException
 from app.modules.audit.service import record_audit
 from app.modules.invoices.model import Invoice
-from app.modules.messages.constants import CancelReason, MessageStatus
-from app.modules.messages.model import Message
+from app.modules.messages.constants import CancelReason
+from app.modules.messages.log_repository import cancel_pending_messages_for_invoices
 from app.modules.students.model import Student
 from app.modules.users.model import User
 from app.shared.clock import Clock, local_today
@@ -281,19 +281,13 @@ class ImportService:
                                     updated_at=now,
                                 )
                             )
-                            await self.db.execute(
-                                update(Message)
-                                .where(
-                                    Message.invoice_id.in_(inv_ids),
-                                    Message.status == MessageStatus.QUEUED.value,
-                                )
-                                .values(
-                                    status=MessageStatus.CANCELLED.value,
-                                    cancel_reason=CancelReason.MANUAL.value,
-                                    error="Impor dihapus",
-                                    updated_by=actor.email,
-                                    updated_at=now,
-                                )
+                            await cancel_pending_messages_for_invoices(
+                                self.db,
+                                inv_ids,
+                                reason=CancelReason.MANUAL,
+                                error="Impor dihapus",
+                                actor=actor.email,
+                                now=now,
                             )
                         std_ids = list(
                             await self.db.scalars(

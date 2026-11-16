@@ -10,12 +10,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
 from app.modules.invoices.model import Invoice
 from app.modules.messages.constants import SENT_STATUSES, CancelReason, MessageStatus
+from app.modules.messages.log_repository import cancel_pending_messages_for_invoices
 from app.modules.messages.model import Message
 from app.modules.students.model import Student
 
@@ -162,20 +163,12 @@ async def execute_plan(db: AsyncSession, plan: RollbackPlan, *, actor: str, now:
         obj.updated_by = actor
         obj.updated_at = now
 
-    for chunk in _chunks(plan.deleted_invoice_ids):
-        await db.execute(
-            update(Message)
-            .where(
-                Message.invoice_id.in_(chunk),
-                Message.status == MessageStatus.QUEUED.value,
-            )
-            .values(
-                status=MessageStatus.CANCELLED.value,
-                cancel_reason=CancelReason.MANUAL.value,
-                error=MSG_ROLLBACK_CANCEL_ERROR,
-                updated_by=actor,
-                updated_at=now,
-            )
-            .execution_options(synchronize_session=False)
-        )
+    await cancel_pending_messages_for_invoices(
+        db,
+        plan.deleted_invoice_ids,
+        reason=CancelReason.MANUAL,
+        error=MSG_ROLLBACK_CANCEL_ERROR,
+        actor=actor,
+        now=now,
+    )
     await db.flush()

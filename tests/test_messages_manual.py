@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 from sqlalchemy import select
@@ -400,3 +400,40 @@ async def test_manual_send_again_is_allowed_once_the_first_one_went_out(
     assert again.status_code == 200
     assert again.json()["queued_count"] == 1
     assert await queued_manual_count() == 2
+
+
+async def test_manual_allows_resend_after_delete_and_stale_sending_delete(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    invoice_id = await add_invoice(1)
+    tpl_id = await create_template()
+    body = {"template_id": tpl_id, "invoice_ids": [invoice_id]}
+
+    first = await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)
+    assert first.status_code == 200
+
+    async with get_session_factory()() as db:
+        msg = (await db.scalars(select(Message))).one()
+        msg_id = msg.id
+        # Simulate a worker dying mid-claim without getting a provider id.
+        msg.status = "sending"
+        msg.provider_message_id = None
+        msg.updated_at = datetime.now(UTC) - timedelta(minutes=20)
+        await db.commit()
+
+    # Blocked while still pending
+    blocked = (await client.post(MANUAL_PREVIEW_URL, headers=staf_headers, json=body)).json()
+    assert blocked["eligible_count"] == 0
+    assert blocked["excluded_breakdown"]["already_queued"] == 1
+
+    # Deleting the stuck sending row unblocks manual sending immediately
+    deleted = await client.delete(f"/api/v1/messages/{msg_id}", headers=staf_headers)
+    assert deleted.status_code == 204
+
+    unblocked = (await client.post(MANUAL_PREVIEW_URL, headers=staf_headers, json=body)).json()
+    assert unblocked["eligible_count"] == 1
+    assert unblocked["excluded_breakdown"]["already_queued"] == 0
+
+    resent = await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)
+    assert resent.status_code == 200
+    assert resent.json()["queued_count"] == 1
