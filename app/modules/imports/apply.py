@@ -1,5 +1,6 @@
 """Apply: upsert students and invoices from validated rows. The caller owns the transaction."""
 
+from collections.abc import Collection
 from datetime import date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,11 +15,13 @@ from app.modules.students.constants import PhoneStatus
 from app.modules.students.model import Student
 
 from .changes import ChangeRecorder
+from .constants import ImportKind
 from .existing import (
     belongs_to_other_student,
     invoice_owner_nims,
     invoices_by_code,
     is_sticky_skip,
+    open_invoices_by_id,
     students_by_nim,
     unpaid_invoices_for_students,
 )
@@ -106,6 +109,15 @@ def _mark_paid(invoice: Invoice, row: ValidRow, source: str, today: date) -> Non
     invoice.paid_via = row.paid_via or source
 
 
+def _mark_paid_by_absence(
+    invoice: Invoice, source: str, today: date, actor: str, now: datetime
+) -> None:
+    invoice.status = InvoiceStatus.PAID.value
+    invoice.paid_at = today
+    invoice.paid_via = source
+    _touch(invoice, actor, now)
+
+
 async def apply_rows(
     db: AsyncSession,
     rows: list[ValidRow],
@@ -115,8 +127,14 @@ async def apply_rows(
     now: datetime,
     today: date,
     recorder: ChangeRecorder | None = None,
+    kind: ImportKind = ImportKind.STANDARD,
+    paid_by_absence_ids: Collection[int] = (),
 ) -> dict[str, int]:
     """Upsert students by NIM, then invoices by code; returns the actual counts.
+
+    ``kind`` is the batch kind: for a rekap there is no supersede rule and an existing invoice keeps
+    its due date. ``paid_by_absence_ids`` are invoices staff approved as paid because they vanished
+    from the file; only those still active and unpaid are marked, and each is logged for rollback.
 
     An invoice that is already paid keeps its status, ``paid_at`` and ``paid_via``; an unpaid row
     against it only updates the other fields and counts as skipped. When an existing student
@@ -135,10 +153,12 @@ async def apply_rows(
     imported_codes = {row.invoice_code for row in rows}
     # An invoice restored from the soft-deleted state (e.g. after a rollback) starts over like a
     # new one, so it supersedes the student's older unpaid invoices exactly as the first import did.
+    # A rekap lists arrears only, so a new invoice never settles the student's older ones.
     students_with_new_invoice = [
         students[row.nim].id
         for row in rows
-        if row.nim in students
+        if kind != ImportKind.REKAP
+        and row.nim in students
         and (row.invoice_code not in invoices or invoices[row.invoice_code].deleted_at is not None)
     ]
     superseded_invoices = await unpaid_invoices_for_students(
@@ -147,8 +167,20 @@ async def apply_rows(
         exclude_codes=imported_codes,
     )
 
+    in_file_ids = {invoice.id for invoice in invoices.values()}
+    absent_invoices = [
+        invoice
+        for invoice in await open_invoices_by_id(db, list(paid_by_absence_ids))
+        if invoice.id not in in_file_ids
+    ]
+
     if recorder is not None:  # existing rows are snapshotted before anything mutates them
-        for existing in (*students.values(), *invoices.values(), *superseded_invoices):
+        for existing in (
+            *students.values(),
+            *invoices.values(),
+            *superseded_invoices,
+            *absent_invoices,
+        ):
             recorder.snapshot(existing)
 
     new_nims: set[str] = set()
@@ -166,7 +198,13 @@ async def apply_rows(
             updated_nims.add(row.nim)
     await db.flush()  # new students need their ids for the invoices
 
-    counts = {"invoices_new": 0, "invoices_updated": 0, "invoices_skipped": 0}
+    counts = {
+        "invoices_new": 0,
+        "invoices_updated": 0,
+        "invoices_unchanged": 0,
+        "invoices_skipped": 0,
+        "invoices_paid_by_absence": 0,
+    }
     paid_invoice_ids: list[int] = []
     restored_invoice_ids: list[int] = []
     for row in rows:
@@ -205,7 +243,8 @@ async def apply_rows(
             changed = _set(invoice, "paid_at", None) or changed
             changed = _set(invoice, "paid_via", None) or changed
         changed = _set(invoice, "amount", row.amount) or changed
-        changed = _set(invoice, "due_date", row.due_date) or changed
+        if kind != ImportKind.REKAP or restoring:  # a rekap has no real due date: keep the first
+            changed = _set(invoice, "due_date", row.due_date) or changed
         changed = _set(invoice, "semester", row.semester) or changed
         changed = _set(invoice, "source", source) or changed
         if row.status == InvoiceStatus.PAID.value and invoice.status != InvoiceStatus.PAID.value:
@@ -214,7 +253,12 @@ async def apply_rows(
             paid_invoice_ids.append(invoice.id)
         if changed:
             _touch(invoice, actor, now)
-        counts["invoices_skipped" if skipped else "invoices_updated"] += 1
+        if skipped:
+            counts["invoices_skipped"] += 1
+        elif changed:
+            counts["invoices_updated"] += 1
+        else:
+            counts["invoices_unchanged"] += 1
 
     for old_invoice in superseded_invoices:
         old_invoice.status = InvoiceStatus.PAID.value
@@ -223,6 +267,11 @@ async def apply_rows(
         _touch(old_invoice, actor, now)
         counts["invoices_updated"] += 1
         paid_invoice_ids.append(old_invoice.id)
+
+    for absent_invoice in absent_invoices:
+        _mark_paid_by_absence(absent_invoice, source, today, actor, now)
+        counts["invoices_paid_by_absence"] += 1
+        paid_invoice_ids.append(absent_invoice.id)
 
     await db.flush()
     if paid_invoice_ids:

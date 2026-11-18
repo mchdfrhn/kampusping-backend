@@ -3,7 +3,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import PureWindowsPath
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,8 +41,10 @@ from .constants import (
     MSG_ROLLBACK_NO_LOG,
     MSG_ROLLBACK_NOT_APPLIED,
     MSG_ROLLBACK_NOT_LATEST,
+    ImportKind,
     ImportStatus,
 )
+from .details import DetailCategory
 from .locking import lock_imports
 from .model import ImportBatch, ImportRowError
 from .parser import ImportFileError, parse_upload, resolve_columns
@@ -121,7 +123,8 @@ class ImportService:
         Business data (students, invoices) is not touched.
         """
         try:
-            sheet = parse_upload(filename, content)
+            today = local_today(self.clock(), settings.app_timezone)
+            sheet = parse_upload(filename, content, today=today)
             columns = resolve_columns(sheet.headers, source)
         except ImportFileError as exc:
             raise AppException(str(exc), status_code=422, code=VALIDATION_ERROR) from exc
@@ -133,8 +136,10 @@ class ImportService:
                 file_name=safe_file_name(filename),
                 semester=semester,
                 status=ImportStatus.PREVIEW.value,
+                kind=sheet.kind.value,
                 summary=result.summary,
                 rows=[row_to_json(row) for row in result.rows],
+                details=result.details,
                 created_by=actor.email,
                 updated_by=actor.email,
             )
@@ -161,7 +166,30 @@ class ImportService:
         await self.db.commit()
         return batch
 
-    async def apply(self, batch_id: int, actor: User) -> ImportBatch:
+    async def _preview_details(self, batch_id: int) -> dict[str, builtins.list[dict[str, Any]]]:
+        """The stored details of a batch still in preview (empty lists when it has none)."""
+        batch = await self.batches.get_with_details(batch_id)
+        if batch is None:
+            raise AppException(MSG_BATCH_NOT_FOUND, status_code=404, code=NOT_FOUND)
+        if batch.status != ImportStatus.PREVIEW.value:
+            raise _not_in_preview()
+        return batch.details or {}
+
+    async def list_details(
+        self, batch_id: int, category: DetailCategory, *, page: int, page_size: int
+    ) -> tuple[builtins.list[dict[str, Any]], int]:
+        items = (await self._preview_details(batch_id)).get(category.value, [])
+        start = (page - 1) * page_size
+        return items[start : start + page_size], len(items)
+
+    async def list_detail_ids(self, batch_id: int) -> builtins.list[int]:
+        """Invoice ids of the suspected-paid list: what "select all" needs across pages."""
+        items = (await self._preview_details(batch_id)).get(DetailCategory.SUSPECTED_PAID.value, [])
+        return [item["invoice_id"] for item in items]
+
+    async def apply(
+        self, batch_id: int, actor: User, mark_paid_invoice_ids: Sequence[int] = ()
+    ) -> ImportBatch:
         """Apply a previewed batch in one transaction; the summary becomes the actual counts.
 
         The batch is claimed first (``UPDATE ... WHERE status = 'preview'``), so of several
@@ -189,6 +217,12 @@ class ImportService:
         if batch is None:  # deleted between the claim and the read: nothing sensible to apply
             raise AppException(MSG_BATCH_NOT_FOUND, status_code=404, code=NOT_FOUND)
         rows = [row_from_json(data) for data in batch.rows or []]
+        await self.db.refresh(batch, attribute_names=["details"])
+        # Only invoices the preview listed as suspected paid can be marked; anything else is noise.
+        suspects = {
+            item["invoice_id"]
+            for item in (batch.details or {}).get(DetailCategory.SUSPECTED_PAID.value, [])
+        }
         recorder = ChangeRecorder()
         counts = await apply_rows(
             self.db,
@@ -198,11 +232,14 @@ class ImportService:
             now=now,
             today=local_today(now, settings.app_timezone),
             recorder=recorder,
+            kind=ImportKind(batch.kind),
+            paid_by_absence_ids=suspects & set(mark_paid_invoice_ids),
         )
         self.db.add_all(recorder.build(batch_id=batch.id, actor=actor.email, now=now))
         batch.has_change_log = True
         batch.summary = {**batch.summary, **counts}
         batch.rows = None
+        batch.details = None
         await record_audit(
             self.db,
             actor=actor.email,
@@ -222,6 +259,7 @@ class ImportService:
             {
                 "status": ImportStatus.DISCARDED.value,
                 "rows": None,
+                "details": None,
                 "updated_by": actor.email,
                 "updated_at": now,
             },

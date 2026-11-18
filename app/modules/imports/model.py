@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import AuditedModel
 
-from .constants import ImportStatus
+from .constants import ImportKind, ImportStatus
 
 
 class ImportBatch(AuditedModel):
@@ -30,10 +30,21 @@ class ImportBatch(AuditedModel):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=ImportStatus.PREVIEW.value, index=True
     )
+    kind: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        default=ImportKind.STANDARD.value,
+        server_default=ImportKind.STANDARD.value,
+    )
     summary: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
     # Validated rows kept between preview and apply; SQL NULL once applied or discarded. Deferred
     # because list queries never need it (it can be megabytes).
     rows: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON(none_as_null=True), deferred=True
+    )
+    # What the preview shows beyond the counts: lists ``new``, ``changed`` and ``suspected_paid``.
+    # SQL NULL once applied or discarded. Deferred for the same reason as ``rows``.
+    details: Mapped[dict[str, list[dict[str, Any]]] | None] = mapped_column(
         JSON(none_as_null=True), deferred=True
     )
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

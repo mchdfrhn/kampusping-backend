@@ -16,6 +16,7 @@ from app.modules.imports.columns import (
     REQUIRED_FIELDS,
     normalize_header,
 )
+from app.modules.imports.constants import ImportKind
 from app.modules.imports.parser import (
     MAX_DATA_ROWS,
     MAX_FILE_BYTES,
@@ -32,6 +33,8 @@ from app.modules.imports.validation import (
     parse_status,
     validate_row,
 )
+
+from .imports_helpers import rekap_xlsx
 
 HEADER = ["NIM", "Nama", "Prodi", "Angkatan", "No WA", "Kode Tagihan", "Nominal", "Jatuh Tempo"]
 FULL_HEADER = [*HEADER, "Status", "Tanggal Bayar", "Kanal Pembayaran", "Semester"]
@@ -665,3 +668,20 @@ def test_siakad_rekap_tunggakan_xlsx_parsing() -> None:
     assert sheet.rows[0][5] == "TGK-52022012000-20241"
     assert sheet.rows[0][7] == 2700000
     assert sheet.rows[0][9] == "belum lunas"
+
+
+def test_rekap_sheet_is_marked_rekap_and_uses_given_today() -> None:
+    sheet = parse_upload(
+        "rekap.xlsx",
+        rekap_xlsx(("1001", "2026/2027 Ganjil", 100)),
+        today=date(2026, 11, 16),
+    )
+    assert sheet.kind == ImportKind.REKAP
+    assert sheet.rows[0][5] == "TGK-1001-20261"
+    assert sheet.rows[0][8] == "2026-11-16"
+    assert sheet.rows[0][9] == "belum lunas"
+
+
+def test_standard_sheet_is_marked_standard() -> None:
+    sheet = parse_upload("export.csv", b"NIM,Nama\n1001,Budi\n", today=date(2026, 11, 16))
+    assert sheet.kind == ImportKind.STANDARD

@@ -22,6 +22,7 @@ from .imports_helpers import (
     make_csv,
     make_xlsx,
     preview,
+    preview_rekap,
     student_by_nim,
     upload,
 )
@@ -59,7 +60,10 @@ async def test_preview_changes_no_business_data(
         "students_updated": 1,
         "invoices_new": 1,
         "invoices_updated": 1,
+        "invoices_unchanged": 0,
         "invoices_skipped": 0,
+        "paid_suspected": 0,
+        "incomplete_warning": 0,
     }
     # Nothing in the business tables moved.
     assert await count(Student) == 1
@@ -274,6 +278,7 @@ async def test_list_and_get_history(
         "file_name",
         "semester",
         "status",
+        "kind",
         "summary",
         "created_at",
         "created_by",
@@ -358,3 +363,13 @@ async def test_staf_and_admin_can_import_and_audit_events_are_recorded(
     assert await count(ImportBatch) == 2
     async with get_session_factory()() as db:
         assert await db.scalar(select(func.count()).select_from(ImportRowError)) == 0
+
+
+async def test_preview_response_exposes_the_batch_kind(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    standard = await preview(client, staf_headers, line())
+    rekap = await preview_rekap(client, staf_headers, ("1001", "2026/2027 Ganjil", 100))
+
+    assert standard["kind"] == "standard"
+    assert rekap["kind"] == "rekap"

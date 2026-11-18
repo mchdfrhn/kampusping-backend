@@ -7,15 +7,21 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.invoices.model import Invoice
 from app.modules.students.model import Student
 
-from .constants import MSG_CODE_OTHER_STUDENT, MSG_DUPLICATE_CODE, MSG_NAME_REQUIRED
+from .absent import find_suspected_paid
+from .constants import (
+    MSG_CODE_OTHER_STUDENT,
+    MSG_DUPLICATE_CODE,
+    MSG_NAME_REQUIRED,
+    ImportKind,
+)
+from .details import Details, build_details
+from .diff import Classification, classify_rows
 from .existing import (
     belongs_to_other_student,
     invoice_owner_nims,
     invoices_by_code,
-    is_sticky_skip,
     students_by_nim,
     unpaid_invoices_for_students,
 )
@@ -28,6 +34,7 @@ class PreviewResult:
     rows: list[ValidRow]
     issues: list[RowIssue]
     summary: dict[str, int]
+    details: Details
 
 
 async def build_preview(
@@ -55,10 +62,13 @@ async def build_preview(
     issues = sorted([*issues, *cross_issues], key=lambda issue: issue.row_number)
 
     imported_codes = {row.invoice_code for row in accepted}
+    # A rekap lists arrears only: a new invoice says nothing about the student's older ones.
     students_with_new_invoice = [
         students[row.nim].id
         for row in accepted
-        if row.invoice_code not in invoices and row.nim in students
+        if sheet.kind != ImportKind.REKAP
+        and row.invoice_code not in invoices
+        and row.nim in students
     ]
     superseded = await unpaid_invoices_for_students(
         db,
@@ -66,13 +76,23 @@ async def build_preview(
         exclude_codes=imported_codes,
     )
 
+    classification = classify_rows(accepted, invoices, kind=sheet.kind, source=source)
+    suspected = await find_suspected_paid(db, accepted) if sheet.kind == ImportKind.REKAP else None
+
     summary = {
         "rows_total": len(sheet.rows),
         "rows_valid": len(accepted),
         "rows_error": len({issue.row_number for issue in issues}),
-        **_predict(accepted, students, invoices, superseded_count=len(superseded)),
+        **_predict(accepted, students, classification, superseded_count=len(superseded)),
+        "paid_suspected": len(suspected.items) if suspected else 0,
+        "incomplete_warning": int(suspected.incomplete) if suspected else 0,
     }
-    return PreviewResult(rows=accepted, issues=issues, summary=summary)
+    return PreviewResult(
+        rows=accepted,
+        issues=issues,
+        summary=summary,
+        details=build_details(classification, students, suspected),
+    )
 
 
 def _cross_row_checks(
@@ -104,24 +124,16 @@ def _cross_row_checks(
 def _predict(
     rows: list[ValidRow],
     students: dict[str, Student],
-    invoices: dict[str, Invoice],
+    classification: Classification,
     *,
     superseded_count: int = 0,
 ) -> dict[str, int]:
     nims = {row.nim for row in rows}
-    new_invoices = updated = skipped = 0
-    for row in rows:
-        invoice = invoices.get(row.invoice_code)
-        if invoice is None:
-            new_invoices += 1
-        elif is_sticky_skip(invoice, row):
-            skipped += 1
-        else:
-            updated += 1
     return {
         "students_new": len(nims - students.keys()),
         "students_updated": len(nims & students.keys()),
-        "invoices_new": new_invoices,
-        "invoices_updated": updated + superseded_count,
-        "invoices_skipped": skipped,
+        "invoices_new": len(classification.new),
+        "invoices_updated": len(classification.changed) + superseded_count,
+        "invoices_unchanged": len(classification.unchanged),
+        "invoices_skipped": len(classification.skipped),
     }

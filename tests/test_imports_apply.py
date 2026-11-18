@@ -57,7 +57,11 @@ async def test_apply_upserts_students_and_invoices(
         "students_updated": 0,
         "invoices_new": 2,
         "invoices_updated": 0,
+        "invoices_unchanged": 0,
         "invoices_skipped": 0,
+        "invoices_paid_by_absence": 0,
+        "paid_suspected": 0,
+        "incomplete_warning": 0,
     }
     student = await student_by_nim("2201")
     assert student.name == "Budi"
@@ -648,7 +652,10 @@ async def test_row_with_an_invoice_code_of_another_student_is_a_row_error(
         "students_updated": 1,
         "invoices_new": 0,
         "invoices_updated": 1,
+        "invoices_unchanged": 0,
         "invoices_skipped": 0,
+        "paid_suspected": 0,
+        "incomplete_warning": 0,
     }
     errors = (await client.get(f"{IMPORTS_URL}/{batch['id']}/errors", headers=staf_headers)).json()
     assert errors["items"] == [
@@ -834,3 +841,50 @@ async def test_reimport_restoring_deleted_invoice_cancels_lingering_pending_mess
         assert msg.status == "cancelled"
         assert msg.cancel_reason == "manual"
         assert msg.error == "Tagihan diimpor ulang"
+
+
+async def test_reimporting_an_identical_file_changes_nothing(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    rows = (
+        line(nim="2201", code="INV-1", amount="100"),
+        line(nim="2202", code="INV-2", amount="200"),
+    )
+    await import_lines(client, staf_headers, *rows)
+
+    second = await import_lines(client, staf_headers, *rows)
+
+    assert second["summary"]["invoices_updated"] == 0
+    assert second["summary"]["invoices_unchanged"] == 2
+    assert second["summary"]["invoices_new"] == 0
+
+
+async def test_preview_and_apply_report_the_same_invoice_counts(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    await import_lines(
+        client,
+        staf_headers,
+        line(nim="2201", code="INV-1", amount="100"),
+        line(nim="2202", code="INV-2", amount="200"),
+        line(nim="2203", code="INV-3", amount="300", status="lunas"),
+    )
+    second = await preview(
+        client,
+        staf_headers,
+        line(nim="2201", code="INV-1", amount="100"),  # unchanged
+        line(nim="2202", code="INV-2", amount="250"),  # changed
+        line(nim="2203", code="INV-3", amount="300", status="belum lunas"),  # skipped (paid)
+        line(nim="2204", code="INV-4", amount="400"),  # new
+    )
+    applied = await apply(client, staf_headers, second["id"])
+
+    keys = ("invoices_new", "invoices_updated", "invoices_unchanged", "invoices_skipped")
+    expected = {
+        "invoices_new": 1,
+        "invoices_updated": 1,
+        "invoices_unchanged": 1,
+        "invoices_skipped": 1,
+    }
+    assert {key: second["summary"][key] for key in keys} == expected
+    assert {key: applied.json()["summary"][key] for key in keys} == expected

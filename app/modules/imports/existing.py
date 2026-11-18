@@ -97,3 +97,20 @@ def belongs_to_other_student(row: ValidRow, owners: dict[str, str]) -> bool:
 def is_sticky_skip(invoice: Invoice, row: ValidRow) -> bool:
     """A file never turns a paid invoice back to unpaid (paid is sticky)."""
     return invoice.status == InvoiceStatus.PAID.value and row.status == InvoiceStatus.UNPAID.value
+
+
+async def open_invoices_by_id(db: AsyncSession, invoice_ids: Sequence[int]) -> list[Invoice]:
+    """Active unpaid invoices among ``invoice_ids``; unknown or settled ids are dropped."""
+    found: list[Invoice] = []
+    for chunk in _chunks(sorted(set(invoice_ids))):
+        stmt = (
+            select(Invoice)
+            .where(
+                Invoice.id.in_(chunk),
+                Invoice.deleted_at.is_(None),
+                Invoice.status == InvoiceStatus.UNPAID.value,
+            )
+            .options(noload(Invoice.student))
+        )
+        found.extend(await db.scalars(stmt))
+    return found
