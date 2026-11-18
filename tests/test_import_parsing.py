@@ -621,10 +621,16 @@ def test_siakad_rekap_tunggakan_csv_parsing() -> None:
     assert sheet.rows[0][3] == "2015"  # cohort extracted from NIM
     assert sheet.rows[0][5] == "TGK-201501545-20222"  # invoice code
     assert float(str(sheet.rows[0][7])) == 700000.0  # amount
+    assert sheet.rows[0][10] == [{"label": "001 - DU", "amount": 700_000}]
     assert sheet.rows[1][0] == "201701702"
     assert sheet.rows[1][4] == "085959123666"
     assert sheet.rows[1][5] == "TGK-201701702-20222"
     assert float(str(sheet.rows[1][7])) == 800000.0
+    assert sheet.rows[1][10] == [
+        {"label": "001 - DU", "amount": 200_000},
+        {"label": "002 - SPP", "amount": 500_000},
+        {"label": "006 - Biaya Kegiatan Mahasiswa", "amount": 100_000},
+    ]
 
 
 def test_siakad_rekap_tunggakan_xlsx_parsing() -> None:
@@ -668,6 +674,7 @@ def test_siakad_rekap_tunggakan_xlsx_parsing() -> None:
     assert sheet.rows[0][5] == "TGK-52022012000-20241"
     assert sheet.rows[0][7] == 2700000
     assert sheet.rows[0][9] == "belum lunas"
+    assert sheet.rows[0][10] == [{"label": "SPP", "amount": 2_700_000}]
 
 
 def test_rekap_sheet_is_marked_rekap_and_uses_given_today() -> None:

@@ -1,6 +1,7 @@
 from datetime import date, datetime
+from typing import Any
 
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, String
+from sqlalchemy import JSON, BigInteger, Date, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import AuditedModel
@@ -17,6 +18,7 @@ class Invoice(AuditedModel):
     student_id: Mapped[int] = mapped_column(ForeignKey("students.id"), nullable=False, index=True)
     semester: Mapped[str] = mapped_column(String(50), nullable=False)
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)  # rupiah
+    breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(
         String(10), nullable=False, default=InvoiceStatus.UNPAID.value

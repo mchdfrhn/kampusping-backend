@@ -437,3 +437,45 @@ async def test_manual_allows_resend_after_delete_and_stale_sending_delete(
     resent = await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)
     assert resent.status_code == 200
     assert resent.json()["queued_count"] == 1
+
+
+async def test_manual_preview_and_send_include_siakad_rekap_breakdown(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    csv_text = (
+        "No,PRODI,Jenis Kelas,NIM,Nama,No Hp,Tahun Akademik,Komponen Biaya,Rincian,Rekap\n"
+        "1,55201 - TI,Kelas Pagi,20230099,Adie Jati,081234567890,2026/2027 Ganjil,"
+        "001 - DU,200000,800000\n"
+        ",,,,,,2026/2027 Ganjil,002 - SPP,500000,\n"
+        ",,,,,,2026/2027 Ganjil,006 - Kegiatan,100000,\n"
+    )
+    up = await client.post(
+        "/api/v1/imports",
+        files={"file": ("siakad.csv", csv_text.encode("utf-8"))},
+        data={"source": "siakad"},
+        headers=staf_headers,
+    )
+    assert up.status_code == 201, up.text
+    batch_id = up.json()["id"]
+    ap = await client.post(
+        f"/api/v1/imports/{batch_id}/apply",
+        json={"mark_paid_invoice_ids": []},
+        headers=staf_headers,
+    )
+    assert ap.status_code == 200, ap.text
+
+    tpl_id = await create_template()
+    preview = (
+        await client.post(
+            MANUAL_PREVIEW_URL,
+            headers=staf_headers,
+            json={"template_id": tpl_id},
+        )
+    ).json()
+    assert preview["eligible_count"] == 1
+    sample_body = preview["sample_preview"]["body"]
+    assert "Rp800.000" in sample_body
+    assert "Rincian tagihan:" in sample_body
+    assert "- 001 - DU: Rp200.000" in sample_body
+    assert "- 002 - SPP: Rp500.000" in sample_body
+    assert "- 006 - Kegiatan: Rp100.000" in sample_body

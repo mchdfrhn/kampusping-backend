@@ -26,6 +26,7 @@ TRACKED_FIELDS: dict[ChangeEntity, tuple[str, ...]] = {
     ChangeEntity.INVOICE: (
         "semester",
         "amount",
+        "breakdown",
         "due_date",
         "status",
         "paid_at",

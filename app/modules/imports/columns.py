@@ -19,6 +19,7 @@ CANONICAL_FIELDS = (
     "paid_at",
     "paid_via",
     "semester",
+    "breakdown",
 )
 REQUIRED_FIELDS = ("nim", "invoice_code", "amount", "due_date", "status")
 
@@ -36,6 +37,7 @@ FIELD_LABELS_ID: dict[str, str] = {
     "paid_at": "tanggal bayar",
     "paid_via": "kanal pembayaran",
     "semester": "semester",
+    "breakdown": "rincian",
 }
 
 # Aliases are stored already normalised (see ``normalize_header``).
@@ -93,6 +95,7 @@ _COMMON_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "paid_via": ("kanal pembayaran", "kanal", "kanal bayar", "channel", "payment channel"),
     "semester": ("semester", "periode"),
+    "breakdown": ("rincian", "rincian tagihan", "komponen tagihan"),
 }
 
 ALIASES: dict[str, dict[str, tuple[str, ...]]] = {

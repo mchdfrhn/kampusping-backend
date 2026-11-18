@@ -21,7 +21,7 @@ from app.modules.imports.columns import (
     normalize_header,
 )
 from app.modules.imports.constants import ImportKind
-from app.modules.imports.validation import cell_text
+from app.modules.imports.validation import cell_text, parse_amount
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_DATA_ROWS = 20_000
@@ -60,7 +60,24 @@ SIAKAD_REKAP_HEADERS = [
     "Nominal",
     "Jatuh Tempo",
     "Status",
+    "Rincian",
 ]
+
+
+def _extract_breakdown_item(
+    cells: list[object], komponen_idx: int | None, rincian_idx: int | None
+) -> dict[str, object] | None:
+    if rincian_idx is None or rincian_idx >= len(cells):
+        return None
+    amount = parse_amount(cells[rincian_idx])
+    if amount is None:
+        return None
+    label = (
+        cell_text(cells[komponen_idx])
+        if komponen_idx is not None and komponen_idx < len(cells)
+        else ""
+    )
+    return {"label": label or "Rincian", "amount": amount}
 
 
 def _try_parse_siakad_rekap(
@@ -86,6 +103,10 @@ def _try_parse_siakad_rekap(
                     col_map["phone"] = idx
                 elif name in ("tahun akademik", "semester"):
                     col_map["semester"] = idx
+                elif name in ("komponen biaya", "komponen", "jenis biaya"):
+                    col_map["komponen"] = idx
+                elif name in ("rincian", "rincian tagihan"):
+                    col_map["rincian"] = idx
                 elif name == "rekap":
                     col_map["rekap"] = idx
             break
@@ -103,6 +124,8 @@ def _try_parse_siakad_rekap(
     prodi_idx = col_map.get("prodi")
     phone_idx = col_map.get("phone")
     sem_idx = col_map.get("semester")
+    komponen_idx = col_map.get("komponen")
+    rincian_idx = col_map.get("rincian")
 
     for number, cells in records[header_idx + 1 :]:
         if number > _MAX_SCANNED_RECORDS or len(rows) >= MAX_DATA_ROWS:
@@ -116,12 +139,18 @@ def _try_parse_siakad_rekap(
 
         nim_val = cells[nim_idx] if nim_idx < len(cells) else None
         rekap_val = cells[rekap_idx] if rekap_idx < len(cells) else None
-
-        if nim_val is None or rekap_val is None:
-            continue
-
         nim = cell_text(nim_val)
-        if not nim:
+        rekap_text = cell_text(rekap_val)
+        item = _extract_breakdown_item(cells, komponen_idx, rincian_idx)
+
+        if not nim or not rekap_text:
+            # SIAKAD continuation rows omit NIM & Rekap and add components to the invoice above.
+            if not nim and not rekap_text and rows and item is not None:
+                prev_breakdown = rows[-1][10]
+                if isinstance(prev_breakdown, list):
+                    prev_breakdown.append(item)
+                else:
+                    rows[-1][10] = [item]
             continue
 
         nama = cell_text(cells[nama_idx]) if nama_idx is not None and nama_idx < len(cells) else ""
@@ -144,7 +173,7 @@ def _try_parse_siakad_rekap(
 
         code = f"TGK-{nim}-{sem_code}"
 
-        row = [
+        row: list[object] = [
             nim,
             nama,
             prodi,
@@ -155,6 +184,7 @@ def _try_parse_siakad_rekap(
             rekap_val,
             today_iso,
             "belum lunas",
+            [item] if item is not None else None,
         ]
         rows.append(row)
         row_numbers.append(number)

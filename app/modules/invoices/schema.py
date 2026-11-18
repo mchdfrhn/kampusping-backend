@@ -7,6 +7,11 @@ from app.modules.students.schema import StudentSummary
 from .constants import InvoiceStatus
 
 
+class InvoiceBreakdownItem(BaseModel):
+    label: str
+    amount: int
+
+
 class InvoiceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -15,6 +20,7 @@ class InvoiceRead(BaseModel):
     student: StudentSummary
     semester: str
     amount: int
+    breakdown: list[InvoiceBreakdownItem] | None = None
     due_date: date
     status: str
     paid_at: date | None

@@ -9,7 +9,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from app.shared.phone import normalize_phone
 
@@ -82,6 +82,21 @@ class ValidRow:
     paid_at: date | None
     paid_via: str | None
     phone_raw: str | None = None
+    breakdown: list[dict[str, Any]] | None = None
+
+
+def _parse_breakdown(value: object) -> list[dict[str, Any]] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    items: list[dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        label = cell_text(entry.get("label"))
+        amount = parse_amount(entry.get("amount"))
+        if label and amount is not None:
+            items.append({"label": label, "amount": amount})
+    return items or None
 
 
 def cell_text(value: object) -> str:
@@ -302,4 +317,5 @@ def validate_row(
         paid_at=paid_at if status == "paid" else None,
         paid_via=paid_via,
         phone_raw=phone_raw,
+        breakdown=_parse_breakdown(raw("breakdown")),
     )

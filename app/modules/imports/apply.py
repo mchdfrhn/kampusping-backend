@@ -215,6 +215,7 @@ async def apply_rows(
                 student_id=students[row.nim].id,
                 semester=row.semester,
                 amount=row.amount,
+                breakdown=row.breakdown,
                 due_date=row.due_date,
                 status=InvoiceStatus.UNPAID.value,
                 source=source,
@@ -243,6 +244,7 @@ async def apply_rows(
             changed = _set(invoice, "paid_at", None) or changed
             changed = _set(invoice, "paid_via", None) or changed
         changed = _set(invoice, "amount", row.amount) or changed
+        changed = _set(invoice, "breakdown", row.breakdown) or changed
         if kind != ImportKind.REKAP or restoring:  # a rekap has no real due date: keep the first
             changed = _set(invoice, "due_date", row.due_date) or changed
         changed = _set(invoice, "semester", row.semester) or changed

@@ -53,6 +53,8 @@ def invoice_changes(
         changes["restored"] = (True, False)
     if invoice.amount != row.amount:
         changes["amount"] = (invoice.amount, row.amount)
+    if invoice.breakdown != row.breakdown:
+        changes["breakdown"] = (invoice.breakdown, row.breakdown)
     if kind != ImportKind.REKAP and invoice.due_date != row.due_date:
         changes["due_date"] = (invoice.due_date, row.due_date)
     if invoice.semester != row.semester:

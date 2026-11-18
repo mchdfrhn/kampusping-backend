@@ -212,6 +212,42 @@ def test_build_message_body_does_not_append_opt_out_footer() -> None:
     assert "Balas STOP" not in text
 
 
+def test_build_message_body_renders_rincian_placeholder_and_collapses_when_absent() -> None:
+    tpl = MessageTemplate(name="t", body="Total: Rp{{nominal}}\n\n{{rincian}}\n\nTerima kasih.")
+    with_items = make_invoice()
+    with_items.breakdown = [
+        {"label": "001 - DU", "amount": 200_000},
+        {"label": "002 - SPP", "amount": 1_050_000},
+    ]
+
+    rendered = build_message_body(
+        tpl, student=make_student(), invoice=with_items, settings=make_settings()
+    )
+    assert rendered == (
+        "Total: Rp1.250.000\n\n"
+        "Rincian tagihan:\n"
+        "- 001 - DU: Rp200.000\n"
+        "- 002 - SPP: Rp1.050.000\n\n"
+        "Terima kasih."
+    )
+
+    without_items = build_message_body(
+        tpl, student=make_student(), invoice=make_invoice(), settings=make_settings()
+    )
+    assert without_items == "Total: Rp1.250.000\n\nTerima kasih."
+
+
+def test_build_message_body_appends_breakdown_when_template_has_no_rincian_placeholder() -> None:
+    tpl = MessageTemplate(name="t", body="Total: Rp{{nominal}}.")
+    invoice = make_invoice()
+    invoice.breakdown = [{"label": "001 - DU", "amount": 1_250_000}]
+
+    rendered = build_message_body(
+        tpl, student=make_student(), invoice=invoice, settings=make_settings()
+    )
+    assert rendered == "Total: Rp1.250.000.\n\nRincian tagihan:\n- 001 - DU: Rp1.250.000"
+
+
 # --- template API -------------------------------------------------------------------------------
 
 
