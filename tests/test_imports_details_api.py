@@ -34,7 +34,13 @@ async def test_each_category_lists_its_invoices(
     assert [item["invoice_code"] for item in new["items"]] == ["TGK-1004-20261"]
     assert [item["invoice_code"] for item in suspected["items"]] == ["TGK-1003-20261"]
     assert changed["total"] == 1
-    assert changed["items"][0]["fields"] == {"amount": [200, 250]}
+    assert changed["items"][0]["fields"] == {
+        "amount": [200, 250],
+        "breakdown": [
+            [{"label": "002 - SPP", "amount": 200}],
+            [{"label": "002 - SPP", "amount": 250}],
+        ],
+    }
     for item in (*new["items"], *changed["items"], *suspected["items"]):
         assert "phone" not in item
 
