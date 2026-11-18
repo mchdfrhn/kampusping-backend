@@ -16,7 +16,7 @@ from app.modules.schedules.model import ScheduleRule
 from app.modules.settings.model import AppSettings
 from app.modules.students.model import Student
 from app.modules.templates.model import MessageTemplate
-from app.modules.templates.rendering import OPT_OUT_FOOTER, build_message_body
+from app.modules.templates.rendering import build_message_body
 from app.shared.utils import ensure_utc
 
 # Sunday 15 November 2026, 10:00 in Jakarta (UTC+7).
@@ -564,7 +564,7 @@ async def test_escalated_invoice_is_never_planned() -> None:
 # --- Body ----------------------------------------------------------------------------------
 
 
-async def test_message_body_is_rendered_at_planning_time_with_footer() -> None:
+async def test_message_body_is_rendered_at_planning_time() -> None:
     async with get_session_factory()() as db:
         db.add(AppSettings(id=1, campus_name="Kampus Contoh"))
         await db.commit()
@@ -573,9 +573,7 @@ async def test_message_body_is_rendered_at_planning_time_with_footer() -> None:
     await run_planner()
 
     (message,) = await all_messages()
-    assert message.body == (
-        f"Halo Budi Santoso, tagihan Rp1.250.000 jatuh tempo 15 November 2026.\n\n{OPT_OUT_FOOTER}"
-    )
+    assert message.body == "Halo Budi Santoso, tagihan Rp1.250.000 jatuh tempo 15 November 2026."
     async with get_session_factory()() as db:
         invoice = await db.get(Invoice, invoice_id)
         rule = await db.get(ScheduleRule, rule_id)

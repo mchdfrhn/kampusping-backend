@@ -17,7 +17,7 @@ from .constants import (
     AUDIT_TEMPLATE_UPDATED,
 )
 from .model import MessageTemplate
-from .rendering import SAMPLE_CONTEXT, render_body, unknown_variables, with_opt_out_footer
+from .rendering import SAMPLE_CONTEXT, render_body, unknown_variables
 from .repository import TemplateRepository
 from .schema import TemplatePreviewResponse, TemplateWrite
 
@@ -41,7 +41,7 @@ class TemplateService:
     def preview(self, body: str) -> TemplatePreviewResponse:
         """Render ``body`` with fixed sample data. Unknown variables are reported, not rejected."""
         return TemplatePreviewResponse(
-            rendered=with_opt_out_footer(render_body(body, SAMPLE_CONTEXT)),
+            rendered=render_body(body, SAMPLE_CONTEXT),
             unknown_variables=unknown_variables(body),
         )
 

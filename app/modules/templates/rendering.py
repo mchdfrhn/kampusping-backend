@@ -26,9 +26,6 @@ ALLOWED_VARIABLES: tuple[str, ...] = (
     "nama_kampus",
 )
 
-# Appended to every outgoing message (NFR-03). Never part of the stored template body.
-OPT_OUT_FOOTER = "Balas STOP untuk berhenti."
-
 MONTH_NAMES_ID: tuple[str, ...] = (
     "Januari",
     "Februari",
@@ -91,14 +88,6 @@ def render_body(body: str, context: Mapping[str, str]) -> str:
     return _PLACEHOLDER.sub(substitute, body)
 
 
-def with_opt_out_footer(text: str) -> str:
-    """Exactly one footer at the end: trailing copies are stripped, then one is appended."""
-    text = text.rstrip()
-    while text.endswith(OPT_OUT_FOOTER):
-        text = text.removesuffix(OPT_OUT_FOOTER).rstrip()
-    return f"{text}\n\n{OPT_OUT_FOOTER}" if text else OPT_OUT_FOOTER
-
-
 def build_context(*, student: Student, invoice: Invoice, settings: AppSettings) -> dict[str, str]:
     is_siakad = invoice.source == InvoiceSource.SIAKAD.value
     return {
@@ -120,6 +109,6 @@ def build_context(*, student: Student, invoice: Invoice, settings: AppSettings) 
 def build_message_body(
     template: MessageTemplate, *, student: Student, invoice: Invoice, settings: AppSettings
 ) -> str:
-    """The final WhatsApp text for one student and invoice, always ending in the opt-out footer."""
+    """The final WhatsApp text for one student and invoice."""
     context = build_context(student=student, invoice=invoice, settings=settings)
-    return with_opt_out_footer(render_body(template.body, context))
+    return render_body(template.body, context)

@@ -15,7 +15,6 @@ from app.modules.templates.model import MessageTemplate
 from app.modules.templates.rendering import (
     ALLOWED_VARIABLES,
     MONTH_NAMES_ID,
-    OPT_OUT_FOOTER,
     SAMPLE_CONTEXT,
     build_message_body,
     format_date_id,
@@ -163,12 +162,10 @@ def test_build_message_body_appends_footer_and_picks_link_by_source() -> None:
     )
 
     assert siakad == (
-        "Budi Santoso|2021001|Ganjil 2026/2027|SIAKAD/Civitas|"
-        "https://siakad.contoh.ac.id/bayar\n\n" + OPT_OUT_FOOTER
+        "Budi Santoso|2021001|Ganjil 2026/2027|SIAKAD/Civitas|https://siakad.contoh.ac.id/bayar"
     )
     assert sipema == (
-        "Budi Santoso|2021001|Ganjil 2026/2027|SIPEMA|"
-        "Buka SIPEMA lalu pilih Pembayaran.\n\n" + OPT_OUT_FOOTER
+        "Budi Santoso|2021001|Ganjil 2026/2027|SIPEMA|Buka SIPEMA lalu pilih Pembayaran."
     )
 
 
@@ -184,7 +181,7 @@ def test_build_message_body_fills_amount_date_and_campus_context() -> None:
         settings=make_settings(),
     )
 
-    assert text == "0 17 Agustus 2026 0812-0000-0000 Kampus Contoh\n\n" + OPT_OUT_FOOTER
+    assert text == "0 17 Agustus 2026 0812-0000-0000 Kampus Contoh"
 
 
 def test_build_message_body_with_empty_settings_renders_empty_strings() -> None:
@@ -200,50 +197,19 @@ def test_build_message_body_with_empty_settings_renders_empty_strings() -> None:
         text = build_message_body(
             template, student=make_student(), invoice=make_invoice(source=source), settings=empty
         )
-        assert text == "[][][]\n\n" + OPT_OUT_FOOTER
+        assert text == "[][][]"
 
 
-def test_footer_cannot_be_removed() -> None:
-    student, invoice, settings = make_student(), make_invoice(), make_settings()
-    bodies = [
-        "Halo {{nama}}.",  # stored bodies never need the footer
-        f"Halo {{{{nama}}}}.\n\n{OPT_OUT_FOOTER}",  # footer already present
-        f"Halo {{{{nama}}}}.\n\n{OPT_OUT_FOOTER}\n\n{OPT_OUT_FOOTER}\n\n",  # repeated
-        f"Halo {{{{nama}}}}.\n\n\n{OPT_OUT_FOOTER}   \n",  # extra blank lines
-    ]
-
-    for body in bodies:
-        text = build_message_body(
-            MessageTemplate(name="t", body=body),
-            student=student,
-            invoice=invoice,
-            settings=settings,
-        )
-        assert text == "Halo Budi Santoso.\n\n" + OPT_OUT_FOOTER
-        assert text.count(OPT_OUT_FOOTER) == 1
-
-
-def test_footer_text_in_the_middle_of_a_body_is_kept() -> None:
-    body = f"{OPT_OUT_FOOTER} Terima kasih."
+def test_build_message_body_does_not_append_opt_out_footer() -> None:
     text = build_message_body(
-        MessageTemplate(name="t", body=body),
+        MessageTemplate(name="t", body="Halo {{nama}}."),
         student=make_student(),
         invoice=make_invoice(),
         settings=make_settings(),
     )
 
-    assert text == f"{OPT_OUT_FOOTER} Terima kasih.\n\n{OPT_OUT_FOOTER}"
-
-
-def test_body_that_is_only_the_footer_yields_just_the_footer() -> None:
-    text = build_message_body(
-        MessageTemplate(name="t", body=OPT_OUT_FOOTER),
-        student=make_student(),
-        invoice=make_invoice(),
-        settings=make_settings(),
-    )
-
-    assert text == OPT_OUT_FOOTER
+    assert text == "Halo Budi Santoso."
+    assert "Balas STOP" not in text
 
 
 # --- template API -------------------------------------------------------------------------------
@@ -412,7 +378,6 @@ async def test_preview_renders_sample_data_with_footer(
         "rendered": (
             "Budi Santoso (2021001) Ganjil 2026/2027 Rp1.250.000 15 November 2026 "
             "SIAKAD/Civitas https://siakad.contoh.ac.id/bayar 0812-0000-0000 Kampus Contoh"
-            "\n\n" + OPT_OUT_FOOTER
         ),
         "unknown_variables": [],
     }
@@ -426,20 +391,8 @@ async def test_preview_reports_unknown_variables_without_failing(
     )
 
     assert response.status_code == 200
-    assert response.json()["rendered"] == "Budi Santoso {{foo}}\n\n" + OPT_OUT_FOOTER
+    assert response.json()["rendered"] == "Budi Santoso {{foo}}"
     assert response.json()["unknown_variables"] == ["foo"]
-
-
-async def test_preview_does_not_double_the_footer(
-    client: httpx.AsyncClient, staf_headers: dict[str, str]
-) -> None:
-    response = await client.post(
-        f"{TEMPLATES_URL}/preview",
-        json={"body": f"Halo\n\n{OPT_OUT_FOOTER}"},
-        headers=staf_headers,
-    )
-
-    assert response.json()["rendered"] == "Halo\n\n" + OPT_OUT_FOOTER
 
 
 async def test_preview_rejects_empty_or_oversize_body(
@@ -651,7 +604,7 @@ async def test_seed_creates_defaults_once_and_never_overwrites_edits(
     assert "{{" not in render_body(routine["body"], SAMPLE_CONTEXT)
     for row in templates:
         assert "SIAKAD" not in row["body"]
-        assert OPT_OUT_FOOTER not in row["body"]
+        assert "Balas STOP" not in row["body"]
         assert unknown_variables(row["body"]) == []
         assert row["is_active"] is True
 

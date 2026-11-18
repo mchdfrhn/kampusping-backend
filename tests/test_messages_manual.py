@@ -189,7 +189,7 @@ async def test_manual_preview_calculates_eligibility_and_breakdown(
     sample = data["sample_preview"]
     assert sample is not None
     assert sample["student_name"] == "Andi Pratama"
-    assert "Balas STOP untuk berhenti." in sample["body"]
+    assert "Balas STOP untuk berhenti." not in sample["body"]
     assert "Andi Pratama" in sample["body"]
 
 

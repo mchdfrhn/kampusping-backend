@@ -18,7 +18,6 @@ from .model import MessageTemplate
 
 SEED_ACTOR = "system"
 
-# The opt-out footer is appended when sending and is not part of the stored body.
 # "cara_bayar" / "link_pembayaran" follow the invoice source (SIAKAD or SIPEMA).
 REMINDER_BODY = (
     "Selamat siang, {{nama}} (NIM {{nim}}).\n"
