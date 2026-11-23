@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -17,8 +17,10 @@ from app.modules.templates.rendering import (
     MONTH_NAMES_ID,
     SAMPLE_CONTEXT,
     build_message_body,
+    fill_greeting,
     format_date_id,
     format_rupiah,
+    greeting_for,
     render_body,
     unknown_variables,
 )
@@ -210,6 +212,49 @@ def test_build_message_body_does_not_append_opt_out_footer() -> None:
 
     assert text == "Halo Budi Santoso."
     assert "Balas STOP" not in text
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "expected"),
+    [
+        (0, 0, "Selamat pagi"),
+        (10, 59, "Selamat pagi"),
+        (11, 0, "Selamat siang"),
+        (14, 59, "Selamat siang"),
+        (15, 0, "Selamat sore"),
+        (17, 59, "Selamat sore"),
+        (18, 0, "Selamat malam"),
+        (23, 59, "Selamat malam"),
+    ],
+)
+def test_greeting_for_follows_local_hour(hour: int, minute: int, expected: str) -> None:
+    assert greeting_for(datetime(2026, 11, 23, hour, minute)) == expected
+
+
+def test_fill_greeting_replaces_every_salam_and_keeps_other_text() -> None:
+    body = "{{salam}}, Budi. {{ salam }} lagi. {{nama}}"
+
+    assert (
+        fill_greeting(body, datetime(2026, 11, 23, 15, 0))
+        == "Selamat sore, Budi. Selamat sore lagi. {{nama}}"
+    )
+
+
+def test_build_message_body_leaves_salam_for_the_sender() -> None:
+    text = build_message_body(
+        MessageTemplate(name="t", body="{{salam}} {{nama}}."),
+        student=make_student(),
+        invoice=make_invoice(),
+        settings=make_settings(),
+    )
+
+    assert text == "{{salam}} Budi Santoso."
+
+
+def test_salam_is_an_allowed_variable_with_a_morning_preview() -> None:
+    assert "salam" in ALLOWED_VARIABLES
+    assert unknown_variables("{{salam}}") == []
+    assert render_body("{{salam}}", SAMPLE_CONTEXT) == "Selamat pagi"
 
 
 def test_build_message_body_renders_rincian_placeholder_and_collapses_when_absent() -> None:

@@ -5,7 +5,7 @@ Template bodies are plain WhatsApp text, so values are inserted as-is (no escapi
 
 import re
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime, time
 from typing import Any
 
 from app.modules.invoices.constants import InvoiceSource
@@ -26,6 +26,7 @@ ALLOWED_VARIABLES: tuple[str, ...] = (
     "link_pembayaran",
     "kontak_keuangan",
     "nama_kampus",
+    "salam",
 )
 
 MONTH_NAMES_ID: tuple[str, ...] = (
@@ -58,11 +59,13 @@ SAMPLE_CONTEXT: dict[str, str] = {
     "link_pembayaran": "https://siakad.contoh.ac.id/bayar",
     "kontak_keuangan": "0812-0000-0000",
     "nama_kampus": "Kampus Contoh",
+    "salam": "Selamat pagi",
 }
 
 _PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 _RINCIAN_PLACEHOLDER = re.compile(r"\{\{\s*rincian\s*\}\}")
 _EXTRA_BLANK_LINES = re.compile(r"\n{3,}")
+_SALAM_PLACEHOLDER = re.compile(r"\{\{\s*salam\s*\}\}")
 
 
 def unknown_variables(body: str) -> list[str]:
@@ -136,3 +139,23 @@ def build_message_body(
     if context["rincian"] and not _RINCIAN_PLACEHOLDER.search(template.body):
         text = f"{text.rstrip()}\n\n{context['rincian']}"
     return text
+
+
+def greeting_for(local: datetime) -> str:
+    """The greeting for a local (``APP_TIMEZONE``) moment: pagi before 11:00, siang until 14:59,
+    sore until 17:59, malam from 18:00."""
+    moment = local.time()
+    if moment < time(11):
+        return "Selamat pagi"
+    if moment < time(15):
+        return "Selamat siang"
+    if moment < time(18):
+        return "Selamat sore"
+    return "Selamat malam"
+
+
+def fill_greeting(body: str, local: datetime) -> str:
+    """Fill ``{{salam}}``. It depends on the send time, so planning leaves it in the stored body
+    (``build_context`` has no ``salam`` key) and the sender fills it right before sending."""
+    greeting = greeting_for(local)
+    return _SALAM_PLACEHOLDER.sub(lambda _match: greeting, body)
