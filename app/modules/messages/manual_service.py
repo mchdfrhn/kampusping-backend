@@ -30,9 +30,9 @@ from app.modules.settings.service import SettingsService
 from app.modules.students.constants import PhoneStatus
 from app.modules.students.model import Student
 from app.modules.templates.model import MessageTemplate
-from app.modules.templates.rendering import build_message_body
+from app.modules.templates.rendering import build_message_body, fill_greeting
 from app.modules.users.model import User
-from app.shared.clock import Clock, as_utc, local_today
+from app.shared.clock import Clock, as_utc, local_now, local_today
 from app.shared.phone import mask_phone
 from app.shared.utils import utc_now
 
@@ -190,6 +190,10 @@ class ManualMessageService:
                 if sample_preview is None:
                     rendered_body = build_message_body(
                         template, student=invoice.student, invoice=invoice, settings=settings
+                    )
+                    # The queued body keeps {{salam}} for the sender; show what a send now says.
+                    rendered_body = fill_greeting(
+                        rendered_body, local_now(now, config.app_timezone)
                     )
                     sample_preview = SamplePreview(
                         student_name=invoice.student.name,

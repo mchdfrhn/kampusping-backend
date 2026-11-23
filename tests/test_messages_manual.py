@@ -1,8 +1,10 @@
 from datetime import UTC, date, datetime, timedelta
 
 import httpx
+from fastapi import FastAPI
 from sqlalchemy import select
 
+from app.api.deps import get_clock
 from app.db.session import get_session_factory
 from app.modules.invoices.model import Invoice
 from app.modules.messages.model import Message
@@ -16,14 +18,19 @@ MANUAL_PREVIEW_URL = "/api/v1/messages/manual/preview"
 MANUAL_SEND_URL = "/api/v1/messages/manual/send"
 
 
-async def create_template(name: str = "Pengingat Manual", is_active: bool = True) -> int:
+DEFAULT_BODY = (
+    "Halo {{nama}}, tagihan {{semester}} sebesar Rp{{nominal}} "
+    "jatuh tempo pada {{tanggal_jatuh_tempo}}."
+)
+
+
+async def create_template(
+    name: str = "Pengingat Manual", is_active: bool = True, body: str = DEFAULT_BODY
+) -> int:
     async with get_session_factory()() as db:
         tpl = MessageTemplate(
             name=name,
-            body=(
-                "Halo {{nama}}, tagihan {{semester}} sebesar Rp{{nominal}} "
-                "jatuh tempo pada {{tanggal_jatuh_tempo}}."
-            ),
+            body=body,
             is_active=is_active,
             created_by="test",
             updated_by="test",
@@ -191,6 +198,25 @@ async def test_manual_preview_calculates_eligibility_and_breakdown(
     assert sample["student_name"] == "Andi Pratama"
     assert "Balas STOP untuk berhenti." not in sample["body"]
     assert "Andi Pratama" in sample["body"]
+
+
+async def test_manual_preview_fills_salam_from_the_current_time_but_queues_the_placeholder(
+    app: FastAPI, client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    # 14:00 in Jakarta: the preview shows what a send right now would say.
+    app.dependency_overrides[get_clock] = lambda: lambda: datetime(2026, 11, 16, 7, 0, tzinfo=UTC)
+    await setup_test_students_and_invoices()
+    tpl_id = await create_template(body="{{salam}}, {{nama}}.")
+    body = {"template_id": tpl_id, "cohort": "2023", "status": "all"}
+
+    preview = (await client.post(MANUAL_PREVIEW_URL, headers=staf_headers, json=body)).json()
+    assert preview["sample_preview"]["body"] == "Selamat siang, Andi Pratama."
+
+    sent = await client.post(MANUAL_SEND_URL, headers=staf_headers, json=body)
+    assert sent.status_code in (200, 201)
+    async with get_session_factory()() as db:
+        bodies = list((await db.scalars(select(Message.body))).all())
+    assert bodies == ["{{salam}}, Andi Pratama."]  # the sender fills it at send time
 
 
 async def test_manual_send_queues_messages_and_records_audit(
