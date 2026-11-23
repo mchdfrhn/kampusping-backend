@@ -505,3 +505,87 @@ async def test_manual_preview_and_send_include_siakad_rekap_breakdown(
     assert "- 001 - DU: Rp200.000" in sample_body
     assert "- 002 - SPP: Rp500.000" in sample_body
     assert "- 006 - Kegiatan: Rp100.000" in sample_body
+
+
+async def test_manual_component_filter_customizes_billed_total_and_rincian(
+    client: httpx.AsyncClient, staf_headers: dict[str, str]
+) -> None:
+    csv_text = (
+        "No,PRODI,Jenis Kelas,NIM,Nama,No Hp,Tahun Akademik,Komponen Biaya,Rincian,Rekap\n"
+        "1,55201 - TI,Kelas Pagi,20230099,Adie Jati,081234567890,2026/2027 Ganjil,"
+        "001 - DU,200000,800000\n"
+        ",,,,,,2026/2027 Ganjil,Biaya Praktikum,500000,\n"
+        ",,,,,,2026/2027 Ganjil,Biaya Sidang Skripsi,100000,\n"
+        "2,55201 - TI,Kelas Pagi,20230100,Budi Hanya SPP,081234567891,2026/2027 Ganjil,"
+        "002 - SPP,1000000,1000000\n"
+    )
+    up = await client.post(
+        "/api/v1/imports",
+        files={"file": ("siakad.csv", csv_text.encode("utf-8"))},
+        data={"source": "siakad"},
+        headers=staf_headers,
+    )
+    assert up.status_code == 201
+    batch_id = up.json()["id"]
+    ap = await client.post(
+        f"/api/v1/imports/{batch_id}/apply",
+        json={"mark_paid_invoice_ids": []},
+        headers=staf_headers,
+    )
+    assert ap.status_code == 200
+
+    opts = (await client.get(MANUAL_OPTIONS_URL, headers=staf_headers)).json()
+    assert opts["components"] == [
+        "001 - DU",
+        "002 - SPP",
+        "Biaya Praktikum",
+        "Biaya Sidang Skripsi",
+    ]
+
+    tpl_id = await create_template()
+    # Select only Biaya Praktikum and Biaya Sidang Skripsi:
+    # - Budi Hanya SPP is excluded (does not owe those components)
+    # - Adie Jati is billed Rp600.000 (500.000 + 100.000), not Rp800.000
+    preview = (
+        await client.post(
+            MANUAL_PREVIEW_URL,
+            headers=staf_headers,
+            json={
+                "template_id": tpl_id,
+                "components": ["Biaya Praktikum", "Biaya Sidang Skripsi"],
+            },
+        )
+    ).json()
+    assert preview["total_matched"] == 1
+    assert preview["eligible_count"] == 1
+    assert preview["items"][0]["student_name"] == "Adie Jati"
+    assert preview["items"][0]["amount"] == 600_000
+    assert preview["items"][0]["breakdown"] == [
+        {"label": "Biaya Praktikum", "amount": 500_000},
+        {"label": "Biaya Sidang Skripsi", "amount": 100_000},
+    ]
+    sample_body = preview["sample_preview"]["body"]
+    assert "Rp600.000" in sample_body
+    assert "Rp800.000" not in sample_body
+    assert "- Biaya Praktikum: Rp500.000" in sample_body
+    assert "- Biaya Sidang Skripsi: Rp100.000" in sample_body
+    assert "001 - DU" not in sample_body
+
+    send_res = await client.post(
+        MANUAL_SEND_URL,
+        headers=staf_headers,
+        json={
+            "template_id": tpl_id,
+            "invoice_ids": [preview["items"][0]["invoice_id"]],
+            "components": ["Biaya Praktikum", "Biaya Sidang Skripsi"],
+        },
+    )
+    assert send_res.status_code == 200
+    assert send_res.json()["queued_count"] == 1
+
+    async with get_session_factory()() as db:
+        msg = (await db.scalars(select(Message))).one()
+        assert "Rp600.000" in msg.body
+        assert "- Biaya Praktikum: Rp500.000" in msg.body
+        assert "- Biaya Sidang Skripsi: Rp100.000" in msg.body
+        assert "001 - DU" not in msg.body

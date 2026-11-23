@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -70,6 +70,7 @@ class ManualRecipientItem(BaseModel):
     cohort: str | None
     semester: str
     amount: int
+    breakdown: list[dict[str, Any]] | None = None
     due_date: date
     invoice_status: str
     is_eligible: bool
@@ -103,6 +104,7 @@ class ManualMessagePreviewRequest(BaseModel):
     status: str | None = None
     search: str | None = None
     invoice_ids: list[int] | None = None
+    components: list[str] | None = None
 
 
 class ManualMessagePreviewRead(BaseModel):
@@ -124,6 +126,7 @@ class ManualMessageSendRequest(BaseModel):
     status: str | None = None
     search: str | None = None
     invoice_ids: list[int] | None = None
+    components: list[str] | None = None
 
 
 class ManualMessageSendRead(BaseModel):
@@ -137,3 +140,4 @@ class ManualFilterOptionsRead(BaseModel):
     cohorts: list[str]
     study_programs: list[str]
     semesters: list[str]
+    components: list[str] = []
