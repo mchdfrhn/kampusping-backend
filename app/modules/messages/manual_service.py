@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Sequence
 from datetime import date
+from typing import Any
 
 from sqlalchemy import distinct, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,13 +59,27 @@ class ManualMessageService:
             .where(Invoice.semester.is_not(None), Invoice.semester != "")
             .order_by(Invoice.semester.desc())
         )
+        breakdowns_query = select(Invoice.breakdown).where(
+            Invoice.deleted_at.is_(None),
+            Invoice.breakdown.is_not(None),
+        )
         cohorts = [c for c in (await self.db.scalars(cohorts_query)) if c]
         study_programs = [p for p in (await self.db.scalars(study_programs_query)) if p]
         semesters = [s for s in (await self.db.scalars(semesters_query)) if s]
+        component_set: set[str] = set()
+        for breakdown in await self.db.scalars(breakdowns_query):
+            if not isinstance(breakdown, list):
+                continue
+            for item in breakdown:
+                if isinstance(item, dict):
+                    label = str(item.get("label", "")).strip()
+                    if label:
+                        component_set.add(label)
         return ManualFilterOptionsRead(
             cohorts=cohorts,
             study_programs=study_programs,
             semesters=semesters,
+            components=sorted(component_set),
         )
 
     async def _get_template(self, template_id: int) -> MessageTemplate:
@@ -94,10 +109,12 @@ class ManualMessageService:
             stmt = stmt.where(Student.study_program == req.study_program)
         if req.semester:
             stmt = stmt.where(Invoice.semester == req.semester)
-        if req.amount_min is not None:
-            stmt = stmt.where(Invoice.amount >= req.amount_min)
-        if req.amount_max is not None:
-            stmt = stmt.where(Invoice.amount <= req.amount_max)
+        has_components = bool(req.components and any(c.strip() for c in req.components))
+        if not has_components:
+            if req.amount_min is not None:
+                stmt = stmt.where(Invoice.amount >= req.amount_min)
+            if req.amount_max is not None:
+                stmt = stmt.where(Invoice.amount <= req.amount_max)
         if req.status and req.status != "all":
             stmt = stmt.where(Invoice.status == req.status)
         elif not req.status:
@@ -166,15 +183,62 @@ class ManualMessageService:
             return False, "Sudah dalam antrean", "already_queued"
         return True, None, None
 
+    @staticmethod
+    def _normalize_components(components: Sequence[str] | None) -> set[str]:
+        if not components:
+            return set()
+        return {c.strip() for c in components if c and c.strip()}
+
+    @staticmethod
+    def _resolve_invoice_billing(
+        invoice: Invoice,
+        selected_components: set[str],
+        *,
+        amount_min: int | None,
+        amount_max: int | None,
+    ) -> tuple[list[dict[str, Any]] | None, int] | None:
+        """Return ``(effective_breakdown, effective_amount)`` or ``None`` if filtered out."""
+        if not selected_components:
+            return invoice.breakdown, invoice.amount
+        if not invoice.breakdown:
+            return None
+        matched = [
+            {"label": str(item["label"]).strip(), "amount": int(item["amount"])}
+            for item in invoice.breakdown
+            if isinstance(item, dict)
+            and str(item.get("label", "")).strip() in selected_components
+            and item.get("amount") is not None
+        ]
+        if not matched:
+            return None
+        total = sum(int(item["amount"]) for item in matched)
+        if amount_min is not None and total < amount_min:
+            return None
+        if amount_max is not None and total > amount_max:
+            return None
+        return matched, total
+
     async def preview(self, req: ManualMessagePreviewRequest) -> ManualMessagePreviewRead:
         template = await self._get_template(req.template_id)
         settings = await SettingsService(self.db).get()
         now = as_utc(self.clock())
         today = local_today(now, config.app_timezone)
+        selected_components = self._normalize_components(req.components)
 
         stmt = self._build_invoices_query(req)
-        invoices = list((await self.db.scalars(stmt)).all())
-        pending = await self._pending_invoice_ids([inv.id for inv in invoices])
+        raw_invoices = list((await self.db.scalars(stmt)).all())
+        resolved_invoices: list[tuple[Invoice, list[dict[str, Any]] | None, int]] = []
+        for inv in raw_invoices:
+            resolved = self._resolve_invoice_billing(
+                inv,
+                selected_components,
+                amount_min=req.amount_min,
+                amount_max=req.amount_max,
+            )
+            if resolved is not None:
+                resolved_invoices.append((inv, resolved[0], resolved[1]))
+
+        pending = await self._pending_invoice_ids([inv.id for inv, _, _ in resolved_invoices])
 
         breakdown = ExcludedBreakdown()
         items: list[ManualRecipientItem] = []
@@ -182,21 +246,26 @@ class ManualMessageService:
         eligible_count = 0
         excluded_count = 0
 
-        for invoice in invoices:
+        for invoice, eff_breakdown, eff_amount in resolved_invoices:
             is_eligible, exclude_reason, category = self._check_eligibility(invoice, today, pending)
 
             if is_eligible:
                 eligible_count += 1
                 if sample_preview is None:
                     rendered_body = build_message_body(
-                        template, student=invoice.student, invoice=invoice, settings=settings
+                        template,
+                        student=invoice.student,
+                        invoice=invoice,
+                        settings=settings,
+                        amount_override=eff_amount,
+                        breakdown_override=eff_breakdown,
                     )
                     sample_preview = SamplePreview(
                         student_name=invoice.student.name,
                         nim=invoice.student.nim,
                         phone_masked=mask_phone(invoice.student.phone),
                         invoice_code=invoice.invoice_code,
-                        amount=invoice.amount,
+                        amount=eff_amount,
                         body=rendered_body,
                     )
             else:
@@ -223,7 +292,8 @@ class ManualMessageService:
                     study_program=invoice.student.study_program,
                     cohort=invoice.student.cohort,
                     semester=invoice.semester,
-                    amount=invoice.amount,
+                    amount=eff_amount,
+                    breakdown=eff_breakdown,
                     due_date=invoice.due_date,
                     invoice_status=invoice.status,
                     is_eligible=is_eligible,
@@ -232,7 +302,7 @@ class ManualMessageService:
             )
 
         return ManualMessagePreviewRead(
-            total_matched=len(invoices),
+            total_matched=len(resolved_invoices),
             eligible_count=eligible_count,
             excluded_count=excluded_count,
             excluded_breakdown=breakdown,
@@ -245,18 +315,30 @@ class ManualMessageService:
         settings = await SettingsService(self.db).get()
         now = as_utc(self.clock())
         today = local_today(now, config.app_timezone)
+        selected_components = self._normalize_components(req.components)
 
         stmt = self._build_invoices_query(req, lock_rows=True)
-        invoices = list((await self.db.scalars(stmt)).all())
-        pending = await self._pending_invoice_ids([inv.id for inv in invoices])
+        raw_invoices = list((await self.db.scalars(stmt)).all())
+        resolved_invoices: list[tuple[Invoice, list[dict[str, Any]] | None, int]] = []
+        for inv in raw_invoices:
+            resolved = self._resolve_invoice_billing(
+                inv,
+                selected_components,
+                amount_min=req.amount_min,
+                amount_max=req.amount_max,
+            )
+            if resolved is not None:
+                resolved_invoices.append((inv, resolved[0], resolved[1]))
 
-        eligible_invoices: list[Invoice] = []
+        pending = await self._pending_invoice_ids([inv.id for inv, _, _ in resolved_invoices])
+
+        eligible_invoices: list[tuple[Invoice, list[dict[str, Any]] | None, int]] = []
         excluded_count = 0
 
-        for invoice in invoices:
+        for invoice, eff_breakdown, eff_amount in resolved_invoices:
             is_eligible, _, _ = self._check_eligibility(invoice, today, pending)
             if is_eligible:
-                eligible_invoices.append(invoice)
+                eligible_invoices.append((invoice, eff_breakdown, eff_amount))
             else:
                 excluded_count += 1
 
@@ -270,9 +352,14 @@ class ManualMessageService:
         batch_ref = f"MANUAL-{today.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
         actor_name = actor.email  # not nullable; the audit entry below uses it too
 
-        for invoice in eligible_invoices:
+        for invoice, eff_breakdown, eff_amount in eligible_invoices:
             rendered_body = build_message_body(
-                template, student=invoice.student, invoice=invoice, settings=settings
+                template,
+                student=invoice.student,
+                invoice=invoice,
+                settings=settings,
+                amount_override=eff_amount,
+                breakdown_override=eff_breakdown,
             )
             msg = Message(
                 student_id=invoice.student_id,
@@ -291,20 +378,24 @@ class ManualMessageService:
             )
             self.db.add(msg)
 
+        audit_detail: dict[str, Any] = {
+            "batch_ref": batch_ref,
+            "template_id": template.id,
+            "template_name": template.name,
+            "queued_count": len(eligible_invoices),
+            "excluded_count": excluded_count,
+            "total_matched": len(resolved_invoices),
+        }
+        if selected_components:
+            audit_detail["components"] = sorted(selected_components)
+
         await record_audit(
             self.db,
             actor=actor.email,
             action="messages:manual_send",
             entity="messages",
             entity_id=batch_ref,
-            detail={
-                "batch_ref": batch_ref,
-                "template_id": template.id,
-                "template_name": template.name,
-                "queued_count": len(eligible_invoices),
-                "excluded_count": excluded_count,
-                "total_matched": len(invoices),
-            },
+            detail=audit_detail,
         )
 
         await self.db.commit()
@@ -313,5 +404,5 @@ class ManualMessageService:
             batch_ref=batch_ref,
             queued_count=len(eligible_invoices),
             excluded_count=excluded_count,
-            total_matched=len(invoices),
+            total_matched=len(resolved_invoices),
         )

@@ -108,14 +108,23 @@ def render_body(body: str, context: Mapping[str, str]) -> str:
     return rendered
 
 
-def build_context(*, student: Student, invoice: Invoice, settings: AppSettings) -> dict[str, str]:
+def build_context(
+    *,
+    student: Student,
+    invoice: Invoice,
+    settings: AppSettings,
+    amount_override: int | None = None,
+    breakdown_override: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, str]:
     is_siakad = invoice.source == InvoiceSource.SIAKAD.value
+    effective_amount = invoice.amount if amount_override is None else amount_override
+    effective_breakdown = invoice.breakdown if breakdown_override is None else breakdown_override
     return {
         "nama": student.name,
         "nim": student.nim,
         "semester": invoice.semester,
-        "nominal": format_rupiah(invoice.amount),
-        "rincian": format_breakdown(invoice.breakdown),
+        "nominal": format_rupiah(effective_amount),
+        "rincian": format_breakdown(effective_breakdown),
         "tanggal_jatuh_tempo": format_date_id(invoice.due_date),
         "cara_bayar": PAYMENT_CHANNEL_SIAKAD if is_siakad else PAYMENT_CHANNEL_SIPEMA,
         "link_pembayaran": (
@@ -128,10 +137,22 @@ def build_context(*, student: Student, invoice: Invoice, settings: AppSettings) 
 
 
 def build_message_body(
-    template: MessageTemplate, *, student: Student, invoice: Invoice, settings: AppSettings
+    template: MessageTemplate,
+    *,
+    student: Student,
+    invoice: Invoice,
+    settings: AppSettings,
+    amount_override: int | None = None,
+    breakdown_override: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     """The final WhatsApp text for one student and invoice."""
-    context = build_context(student=student, invoice=invoice, settings=settings)
+    context = build_context(
+        student=student,
+        invoice=invoice,
+        settings=settings,
+        amount_override=amount_override,
+        breakdown_override=breakdown_override,
+    )
     text = render_body(template.body, context)
     if context["rincian"] and not _RINCIAN_PLACEHOLDER.search(template.body):
         text = f"{text.rstrip()}\n\n{context['rincian']}"
