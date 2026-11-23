@@ -251,6 +251,32 @@ async def test_sends_a_queued_message_and_records_the_provider_id() -> None:
     assert message.updated_by == "system"
 
 
+async def test_salam_is_filled_from_the_send_time_not_the_planning_time() -> None:
+    # Planned (body rendered) in the morning, sent in the afternoon.
+    message_id = await queued_message(body="{{salam}}, Budi.")
+    fake = FakeProvider()
+
+    assert await run(fake, FakeClock(at_wib(TODAY, 15, 30))) == 1
+
+    (sent,) = fake.sent
+    assert sent.text == "Selamat sore, Budi."
+    message = await get_message(message_id)
+    assert message.status == "sent"
+    assert message.body == "Selamat sore, Budi."  # the log shows what the student received
+
+
+async def test_failed_attempt_keeps_the_salam_placeholder_for_the_retry() -> None:
+    message_id = await queued_message(body="{{salam}}, Budi.")
+    fake = FakeProvider()
+    fake.fail_next(RuntimeError("boom"))
+
+    await run(fake, FakeClock(at_wib(TODAY, 9, 0)))
+
+    message = await get_message(message_id)
+    assert message.status == "queued"
+    assert message.body == "{{salam}}, Budi."
+
+
 async def test_send_next_returns_idle_when_the_queue_is_empty() -> None:
     outcome = await send_next(
         get_session_factory(), FakeProvider(), now=NOW, sleep=Sleeper(), jitter=Jitter()

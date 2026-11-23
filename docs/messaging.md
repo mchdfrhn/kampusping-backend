@@ -148,7 +148,11 @@ after downtime, never duplicates a message. Order inside one pass:
    weekend is still planned on Monday). Each message gets `scheduled_date = due_date + offset_days`
    and a body **rendered at planning time** (template variables plus the footer
    `Balas STOP untuk berhenti.`); later edits to the template or settings do not change queued
-   messages.
+   messages. The one exception is `{{salam}}` ("Selamat pagi/siang/sore/malam": before 11:00,
+   until 14:59, until 17:59, from 18:00 in `APP_TIMEZONE`): it depends on the moment of sending, so
+   it stays in the stored body and the sender fills it right before `provider.send`. The text as
+   sent replaces the body when the send succeeds; a failed attempt keeps the placeholder, so a
+   retry greets by its own send time. Manual messages follow the same rule.
 4. **Supersede**: per invoice only the queued automatic message with the latest `scheduled_date`
    (ties: highest id) survives; older ones become `cancelled(superseded)`. So a student who is late
    gets the current reminder, not a pile of old ones.

@@ -22,7 +22,8 @@ from .constants import MessageStatus
 class Message(AuditedModel):
     """One WhatsApp message in the outbound queue (see ADR 0003).
 
-    ``body`` is rendered when the message is planned and never re-rendered. A NULL ``rule_id``
+    ``body`` is rendered when the message is planned and never re-rendered, except ``{{salam}}``:
+    the sender fills the greeting at send time and stores the text as sent. A NULL ``rule_id``
     marks a manual message; NULLs are distinct in the unique key, so several manual messages may
     exist for one invoice, while an (invoice, rule) pair is planned at most once.
     """

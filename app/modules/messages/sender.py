@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import settings as config
 from app.modules.settings.service import SettingsService
 from app.modules.students.model import Student
+from app.modules.templates.rendering import fill_greeting
 from app.modules.whatsapp.provider import (
     NotOnWhatsApp,
     ProviderError,
@@ -303,9 +304,11 @@ async def _deliver(
     *,
     now: datetime,
 ) -> _Step:
+    # ``{{salam}}`` follows the moment of sending, so it is the one variable filled here.
+    text = fill_greeting(ready.body, local_now(now, config.app_timezone))
     try:
         result = await provider.send(
-            phone=ready.phone, text=ready.body, client_ref=f"msg-{ready.message_id}"
+            phone=ready.phone, text=text, client_ref=f"msg-{ready.message_id}"
         )
     except Exception as exc:
         error: Exception | None = exc
@@ -317,7 +320,7 @@ async def _deliver(
             repo = SendRepository(db)
             if error is None:
                 assert result is not None  # noqa: S101 - narrows the type for pyright
-                step = await _record_success(repo, ready, result, now=now)
+                step = await _record_success(repo, ready, result, text=text, now=now)
             else:
                 step = await _record_failure(repo, ready, error, settings, now=now)
             await db.commit()
@@ -329,11 +332,13 @@ async def _deliver(
 
 
 async def _record_success(
-    repo: SendRepository, ready: _Ready, result: SendResult, *, now: datetime
+    repo: SendRepository, ready: _Ready, result: SendResult, *, text: str, now: datetime
 ) -> _Step:
+    # Store the text as sent (greeting filled); a failed attempt keeps ``{{salam}}`` for its retry.
     recorded = await repo.record_outcome(
         ready.message_id,
         now=now,
+        body=text,
         status=MessageStatus.SENT.value,
         sent_at=now,
         provider_message_id=result.provider_message_id,
